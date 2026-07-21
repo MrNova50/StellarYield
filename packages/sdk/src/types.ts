@@ -2,6 +2,7 @@ export interface VaultConfig {
   contractId: string;
   networkPassphrase: string;
   rpcUrl: string;
+  specHash?: string;
 }
 
 export interface ApiConfig {
@@ -10,13 +11,13 @@ export interface ApiConfig {
 
 export interface DepositParams {
   from: string;
-  amount: string;
-  minSharesOut?: string;
+  amount: bigint | string;
+  minSharesOut?: bigint | string;
 }
 
 export interface WithdrawParams {
   to: string;
-  shares: string;
+  shares: bigint | string;
 }
 
 export interface VaultInfo {
