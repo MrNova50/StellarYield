@@ -7,6 +7,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  sdk:
+    name: SDK & Spec Drift Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version 25.1.0
+
+      - name: Build YieldVault WASM
+        run: cargo build --target wasm32-unknown-unknown --release --package yield_vault
+        working-directory: contracts
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install SDK dependencies
+        working-directory: packages/sdk
+        run: npm ci
+
+      - name: Verify Contract & API Spec Drift
+        working-directory: packages/sdk
+        run: npm run verify-drift
+
+      - name: Run SDK Tests
+        working-directory: packages/sdk
+        run: npm test
+
+      - name: Build SDK Package
+        working-directory: packages/sdk
+        run: npm run build
+
   backend:
     name: Backend Checks
     runs-on: ubuntu-latest
