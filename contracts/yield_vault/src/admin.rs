@@ -2,23 +2,10 @@ use crate::{DataKey, VaultError, YieldVault};
 use soroban_sdk::{symbol_short, Address, Env};
 
 impl YieldVault {
-    /// Immediately pause all vault operations (deposit, withdraw, rebalance).
-    /// Callable only by admin.
-    pub fn emergency_pause(env: Env, admin: Address) -> Result<(), VaultError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish((symbol_short!("pause"),), (admin,));
-        Ok(())
-    }
-
-    /// Resume vault operations after an emergency pause.
-    /// Callable only by admin.
-    pub fn emergency_unpause(env: Env, admin: Address) -> Result<(), VaultError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().remove(&DataKey::Paused);
-        env.events().publish((symbol_short!("unpause"),), (admin,));
-        Ok(())
-    }
+    /// Note: `emergency_pause` and `emergency_unpause` have moved to emergency.rs.
+    /// They now support guardian authority, bounded durations, automatic expiry,
+    /// and governance oversight. Use `YieldVault::emergency_pause(env, caller, duration)`
+    /// and `YieldVault::emergency_unpause(env, caller)` instead.
 
     /// Rescue tokens sent to the contract by mistake.
     ///
@@ -109,10 +96,37 @@ impl YieldVault {
     }
 
     /// View function to check if the vault is currently paused.
+    /// Delegates to emergency.rs implementation which handles automatic expiry
+    /// and guardian-based pause state.
     pub fn is_paused(env: &Env) -> bool {
-        env.storage()
+        // Check legacy pause flag (DataKey::Paused) for backward compatibility
+        // and delegate to emergency.rs for the new timelocked pause system.
+        // The emergency module's is_paused handles automatic expiry.
+        let legacy_paused: bool = env
+            .storage()
             .instance()
             .get(&DataKey::Paused)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if legacy_paused {
+            return true;
+        }
+        // Check emergency module pause state (handles automatic expiry)
+        let pause_start: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseStart);
+        let pause_duration: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseDuration);
+        match (pause_start, pause_duration) {
+            (Some(start), Some(duration)) => {
+                let now = env.ledger().timestamp();
+                let elapsed = now.saturating_sub(start);
+                if elapsed >= duration {
+                    // Pause has expired - auto-cleanup
+                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseStart);
+                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseDuration);
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        }
     }
 }

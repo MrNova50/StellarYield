@@ -7,26 +7,59 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  BarChart,
+  Bar,
+  Legend,
 } from "recharts";
 import { useWallet } from "../../context/useWallet";
-import { TrendingUp, TrendingDown, Loader2, DollarSign, BarChart3 } from "lucide-react";
+import {
+  TrendingUp,
+  TrendingDown,
+  Loader2,
+  DollarSign,
+  BarChart3,
+  AlertTriangle,
+  Info,
+} from "lucide-react";
 import { getApiBaseUrl } from "../../lib/api";
 import ApiErrorBanner from "../../components/ApiErrorBanner/ApiErrorBanner";
+
+interface PnLComponentBreakdown {
+  realized: number;
+  unrealized: number;
+  fees: number;
+  rewards: number;
+}
 
 interface DailyPnLSnapshot {
   date: string;
   cumulativePnL: number;
   portfolioValue: number;
   sharePrice: number;
+  components?: PnLComponentBreakdown;
+}
+
+interface TaxLot {
+  id: string;
+  amount: number;
+  costBasisPerToken: number;
+  acquiredAt: string;
+  source: string;
+  txHash: string;
 }
 
 interface PnLData {
-  totalDeposited: number;
-  totalWithdrawn: number;
+  method: string;
+  totalDeposited: string;
+  totalWithdrawn: string;
   currentValue: number;
   costBasis: number;
+  components: PnLComponentBreakdown;
   absolutePnL: number;
   twrPercent: number;
+  activeLots: TaxLot[];
+  valuationSource: string;
+  isStale: boolean;
   dailySnapshots: DailyPnLSnapshot[];
 }
 
@@ -43,8 +76,7 @@ const getApiBase = () => {
  */
 function hasNoData(data: PnLData | null): boolean {
   if (!data) return true;
-  // No deposits and no snapshots = completely empty
-  if (data.totalDeposited === 0 && data.dailySnapshots.length === 0) {
+  if (Number(data.totalDeposited) === 0 && data.dailySnapshots.length === 0) {
     return true;
   }
   return false;
@@ -55,8 +87,25 @@ function hasNoData(data: PnLData | null): boolean {
  */
 function hasPartialData(data: PnLData | null): boolean {
   if (!data) return false;
-  // Has deposits but no daily snapshots
-  return data.totalDeposited > 0 && data.dailySnapshots.length === 0;
+  return Number(data.totalDeposited) > 0 && data.dailySnapshots.length === 0;
+}
+
+/**
+ * Format a value (18 decimal precision) to a display USD string.
+ * Accepts number, bigint, or string representations.
+ */
+function formatBigIntValue(value: number | bigint | string): string {
+  let num: number;
+  if (typeof value === 'bigint') {
+    num = Number(value) / 1e18;
+  } else if (typeof value === 'string') {
+    num = Number(value) / 1e18;
+  } else {
+    num = value;
+  }
+  return Math.abs(num)
+    .toFixed(2)
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 /**
@@ -64,12 +113,14 @@ function hasPartialData(data: PnLData | null): boolean {
  *
  * Shows total deposited, withdrawn, current value, absolute PnL, and
  * Time-Weighted Return, alongside a daily cumulative PnL chart.
+ * Supports component breakdowns and stale valuation warnings.
  */
 export default function PnLChart() {
   const { isConnected, walletAddress } = useWallet();
   const [pnlData, setPnlData] = useState<PnLData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showComponentBreakdown, setShowComponentBreakdown] = useState(false);
 
   const fetchPnL = useCallback(async () => {
     if (!walletAddress) return;
@@ -130,7 +181,7 @@ export default function PnLChart() {
     );
   }
 
-  // Complete no-data state: no deposits and no snapshots
+  // Complete no-data state
   if (hasNoData(pnlData)) {
     return (
       <div className="glass-panel p-8 text-center">
@@ -143,7 +194,6 @@ export default function PnLChart() {
     );
   }
 
-  // Partial data state: has deposits but no chart data
   const showPartialDataWarning = hasPartialData(pnlData);
   const data = pnlData;
   if (!data) return null;
@@ -155,12 +205,25 @@ export default function PnLChart() {
     ? "url(#profitGradient)"
     : "url(#lossGradient)";
 
+  // Prepare component breakdown chart data
+  const componentData = data.components
+    ? [
+        { name: "Realized", value: Math.abs(data.components.realized), fill: "#4ade80" },
+        { name: "Unrealized", value: Math.abs(data.components.unrealized), fill: "#60a5fa" },
+        { name: "Fees", value: Math.abs(data.components.fees), fill: "#f87171" },
+        { name: "Rewards", value: Math.abs(data.components.rewards), fill: "#fbbf24" },
+      ]
+    : [];
+
   return (
     <div className="glass-panel p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold flex items-center gap-2">
           <DollarSign className="text-indigo-400" size={24} />
           Profit & Loss
+          <span className="text-xs text-gray-500 font-normal ml-2">
+            ({data.method === 'fifo' ? 'FIFO' : 'Avg Cost'})
+          </span>
         </h2>
         {isProfit ? (
           <TrendingUp className="text-green-400" size={24} />
@@ -169,18 +232,34 @@ export default function PnLChart() {
         )}
       </div>
 
+      {/* Stale Valuation Warning */}
+      {data.isStale && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+          <AlertTriangle className="text-yellow-400 shrink-0" size={16} />
+          <p className="text-xs text-yellow-300">
+            Valuation data may be stale. Last source: {data.valuationSource}
+          </p>
+        </div>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Deposited" value={`$${fmt(data.totalDeposited)}`} />
-        <StatCard label="Total Withdrawn" value={`$${fmt(data.totalWithdrawn)}`} />
+        <StatCard
+          label="Total Deposited"
+          value={`$${formatBigIntValue(data.totalDeposited)}`}
+        />
+        <StatCard
+          label="Total Withdrawn"
+          value={`$${formatBigIntValue(data.totalWithdrawn)}`}
+        />
         <StatCard
           label="Current Value"
-          value={`$${fmt(data.currentValue)}`}
+          value={`$${formatBigIntValue(data.currentValue)}`}
           highlight
         />
         <StatCard
           label="Absolute PnL"
-          value={`${isProfit ? "+" : "-"}$${fmt(data.absolutePnL)}`}
+          value={`${isProfit ? "+" : "-"}$${formatBigIntValue(data.absolutePnL)}`}
           className={pnlColor}
         />
       </div>
@@ -190,9 +269,81 @@ export default function PnLChart() {
         <span className="text-gray-400 text-sm">Time-Weighted Return:</span>
         <span className={`text-lg font-bold ${pnlColor}`}>
           {data.twrPercent >= 0 ? "+" : ""}
-          {data.twrPercent.toFixed(2)}%
+          {formatBigIntValue(data.twrPercent)}%
         </span>
       </div>
+
+      {/* PnL Component Breakdown Toggle */}
+      {data.components && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowComponentBreakdown(!showComponentBreakdown)}
+            className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300"
+          >
+            <Info size={16} />
+            {showComponentBreakdown ? "Hide" : "Show"} Component Breakdown
+          </button>
+
+          {showComponentBreakdown && (
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <MiniStatCard
+                label="Realized PnL"
+                value={data.components.realized}
+                isPositive={data.components.realized >= 0}
+              />
+              <MiniStatCard
+                label="Unrealized PnL"
+                value={data.components.unrealized}
+                isPositive={data.components.unrealized >= 0}
+              />
+              <MiniStatCard
+                label="Fees Paid"
+                value={data.components.fees}
+                isPositive={false}
+              />
+              <MiniStatCard
+                label="Rewards Earned"
+                value={data.components.rewards}
+                isPositive={true}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Component Breakdown Bar Chart */}
+      {showComponentBreakdown && componentData.length > 0 && (
+        <div className="h-48">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={componentData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis
+                dataKey="name"
+                tick={{ fill: "#9ca3af", fontSize: 12 }}
+              />
+              <YAxis
+                tick={{ fill: "#9ca3af", fontSize: 12 }}
+                tickFormatter={(val: number) => `$${val.toFixed(0)}`}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#1f2937",
+                  border: "1px solid #374151",
+                  borderRadius: "8px",
+                }}
+                labelStyle={{ color: "#9ca3af" }}
+                formatter={(value: number) => [`$${value.toFixed(2)}`, ""]}
+              />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                {componentData.map((entry, index) => (
+                  <rect key={index} fill={entry.fill} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* PnL Chart */}
       {data.dailySnapshots.length > 0 ? (
@@ -278,9 +429,22 @@ function StatCard({
   );
 }
 
-/** Format number with commas and 2 decimal places. */
-function fmt(n: number): string {
-  return Math.abs(n)
-    .toFixed(2)
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+function MiniStatCard({
+  label,
+  value,
+  isPositive,
+}: {
+  label: string;
+  value: number;
+  isPositive: boolean;
+}) {
+  const color = isPositive ? "text-green-400" : "text-red-400";
+  return (
+    <div className="bg-white/5 rounded-lg p-3">
+      <p className="text-gray-400 text-xs mb-0.5">{label}</p>
+      <p className={`text-sm font-bold ${color}`}>
+        {isPositive ? "+" : "-"}${formatBigIntValue(value)}
+      </p>
+    </div>
+  );
 }
