@@ -63,6 +63,12 @@ export interface ReconciliationHistoryEntry {
   changes: PositionChange[];
   mismatches: ReconciliationMismatch[];
   error?: string;
+  metadata?: {
+    orphanedTransactions?: string[]
+    duplicatePositions?: string[]
+    projectionVersion?: number
+    isStale?: boolean
+  }
 }
 
 const reconciliationStore: ReconciliationHistoryEntry[] = [];
@@ -115,6 +121,12 @@ export interface ReconciliationResult {
   mismatches: ReconciliationMismatch[]
   timestamp: Date
   sourceOfTruth: 'chain' | 'backend_snapshot'
+  projectionVersion?: number
+  projectionCheckpoint?: number
+  isStale: boolean
+  staleDurationMs?: number
+  orphanedTransactions?: string[]
+  duplicatePositions?: string[]
 }
 
 export interface PositionChange {
@@ -150,34 +162,61 @@ export class PortfolioReconcileService {
   ): Promise<ReconciliationResult> {
     const changes: PositionChange[] = []
     const mismatches: ReconciliationMismatch[] = []
+    const orphanedTransactions: string[] = []
+    const duplicatePositions: string[] = []
 
     try {
-      // Step 1: Fetch chain-authoritative state
-      const chainPositions = await this.fetchChainPositions(walletAddress)
+      // Step 1: Fetch chain-authoritative state with projection metadata
+      const { positions: chainPositions, projectionVersion, lastLedger } = 
+        await this.fetchChainPositionsWithMetadata(walletAddress)
 
       // Step 2: Fetch cached state from backend
       const cachedPositions = await this.fetchCachedPositions(walletAddress)
 
-      // Step 3: Compare and identify discrepancies
+      // Step 3: Check for staleness (projection age > 5 minutes)
+      const now = Date.now()
+      const projectionAge = now - (lastLedger?.processedAt?.getTime() ?? now)
+      const isStale = projectionAge > 5 * 60 * 1000 // 5 minutes
+
+      // Step 4: Detect orphaned transactions (positions without matching on-chain events)
+      const orphanedTxs = await this.detectOrphanedTransactions(walletAddress, chainPositions)
+      orphanedTransactions.push(...orphanedTxs)
+
+      // Step 5: Detect duplicate positions (same asset across multiple vaults incorrectly)
+      const duplicates = this.detectDuplicatePositions(chainPositions)
+      duplicatePositions.push(...duplicates)
+
+      // Step 6: Compare and identify discrepancies
       const comparisonResult = this.comparePositions(chainPositions, cachedPositions)
       changes.push(...comparisonResult.changes)
       mismatches.push(...comparisonResult.mismatches)
 
-      // Step 4: Update cache to match chain (with confirmation)
+      // Step 7: Update cache to match chain (with confirmation)
       if (!forceChainRevalidation) {
         // In production, this would require user confirmation
         await this.updateCachedPositions(walletAddress, chainPositions)
       }
 
-      // Step 5: Audit and log reconciliation
-      await this.logReconciliationEvent(walletAddress, changes, mismatches)
+      // Step 8: Audit and log reconciliation with anomalies
+      await this.logReconciliationEvent(walletAddress, changes, mismatches, 'success', undefined, {
+        orphanedTransactions,
+        duplicatePositions,
+        projectionVersion,
+        isStale,
+      })
 
       return {
-        status: mismatches.length === 0 ? 'success' : 'partial',
+        status: mismatches.length === 0 && orphanedTransactions.length === 0 ? 'success' : 'partial',
         changes,
         mismatches,
         timestamp: new Date(),
         sourceOfTruth: 'chain',
+        projectionVersion,
+        projectionCheckpoint: lastLedger?.ledger,
+        isStale,
+        staleDurationMs: isStale ? projectionAge : undefined,
+        orphanedTransactions: orphanedTransactions.length > 0 ? orphanedTransactions : undefined,
+        duplicatePositions: duplicatePositions.length > 0 ? duplicatePositions : undefined,
       }
     } catch (error) {
       await this.logReconciliationEvent(walletAddress, [], [], 'failed', error)
@@ -187,6 +226,7 @@ export class PortfolioReconcileService {
         mismatches: [],
         timestamp: new Date(),
         sourceOfTruth: 'chain',
+        isStale: true,
       }
     }
   }
@@ -248,6 +288,49 @@ export class PortfolioReconcileService {
     return { changes, mismatches }
   }
 
+  private async fetchChainPositionsWithMetadata(
+    _walletAddress: string
+  ): Promise<{ 
+    positions: PortfolioPosition[], 
+    projectionVersion?: number, 
+    lastLedger?: { ledger: number, processedAt: Date } 
+  }> {
+    // In production, this would query the actual blockchain/Stellar network
+    // with projection version tracking from IndexerState
+    // For now, return empty array (would be populated by SDK calls)
+    return { 
+      positions: [],
+      projectionVersion: 1,
+      lastLedger: { ledger: 0, processedAt: new Date() }
+    }
+  }
+
+  private async detectOrphanedTransactions(
+    _walletAddress: string,
+    _chainPositions: PortfolioPosition[]
+  ): Promise<string[]> {
+    // Detect transactions in database without matching on-chain events
+    // Would query UserTransaction table and cross-reference with Event table
+    return []
+  }
+
+  private detectDuplicatePositions(positions: PortfolioPosition[]): string[] {
+    const seen = new Map<string, number>()
+    const duplicates: string[] = []
+
+    for (const pos of positions) {
+      const key = `${pos.assetId}:${pos.vaultId}`
+      const count = seen.get(key) ?? 0
+      seen.set(key, count + 1)
+      
+      if (count > 0) {
+        duplicates.push(key)
+      }
+    }
+
+    return duplicates
+  }
+
   private async fetchChainPositions(
     _walletAddress: string
   ): Promise<PortfolioPosition[]> {
@@ -296,7 +379,13 @@ export class PortfolioReconcileService {
     changes: PositionChange[],
     mismatches: ReconciliationMismatch[],
     status: string = 'success',
-    error?: unknown
+    error?: unknown,
+    metadata?: {
+      orphanedTransactions?: string[]
+      duplicatePositions?: string[]
+      projectionVersion?: number
+      isStale?: boolean
+    }
   ): Promise<void> {
     const entry: ReconciliationHistoryEntry = {
       id: `recon_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
@@ -310,6 +399,9 @@ export class PortfolioReconcileService {
     }
     if (error) {
       entry.error = String(error)
+    }
+    if (metadata) {
+      entry.metadata = metadata
     }
     persistReconciliationEvent(entry)
   }

@@ -238,6 +238,75 @@ model RebalanceHistory {
   @@index([completedAt])
 }
 
+// ── Withdrawal Queue Models (Issue #900) ────────────────────────────────────
+
+model WithdrawalQueueEntry {
+  id                  String   @id @default(uuid())
+  vaultId             String
+  walletAddress       String
+  status              String   @default("QUEUED") // QUEUED, EXECUTABLE, EXECUTING, COMPLETED, EXPIRED, CANCELLED
+  
+  // Withdrawal request details
+  shares              Float    // Shares to burn
+  expectedAmount      Float    // Expected withdrawal amount at queue time
+  minAmountOut        Float    // Minimum acceptable amount (slippage protection)
+  maxSlippageBps      Int      // Maximum acceptable slippage in basis points
+  
+  // Queue position and execution
+  queuePosition       Int      // Deterministic ordering within same ledger
+  submittedLedger     Int      // Ledger when request was submitted
+  executableAfter     DateTime // Earliest time this can execute
+  expiresAt           DateTime // Expiry time for the request
+  
+  // Liquidity constraints
+  liquidityRequired   Float    // Amount of liquidity needed
+  liquidityAvailable  Float?   // Available liquidity at execution time
+  partialFillEnabled  Boolean  @default(false)
+  partialFillAmount   Float?   // Amount filled if partial
+  
+  // Execution tracking
+  actualAmount        Float?   // Actual amount withdrawn
+  actualSlippageBps   Int?     // Actual slippage experienced
+  executedAt          DateTime?
+  executedLedger      Int?
+  transactionHash     String?
+  
+  // Cancellation
+  cancelledAt         DateTime?
+  cancelledBy         String?
+  cancellationReason  String?
+  
+  // Audit
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([vaultId, status, queuePosition])
+  @@index([walletAddress, status])
+  @@index([status, executableAfter])
+  @@index([expiresAt, status])
+}
+
+model WithdrawalQueueHistory {
+  id                  String   @id @default(uuid())
+  queueEntryId        String   @unique
+  vaultId             String
+  walletAddress       String
+  
+  shares              Float
+  expectedAmount      Float
+  actualAmount        Float
+  slippageBps         Int
+  
+  status              String   // Final status: COMPLETED | EXPIRED | CANCELLED
+  executedAt          DateTime?
+  transactionHash     String?
+  
+  createdAt           DateTime @default(now())
+
+  @@index([vaultId, executedAt])
+  @@index([walletAddress, createdAt])
+}
+
 // ── Strategy Snapshot Models (Issue #282) ────────────────────────────────────
 
 model StrategySnapshot {
@@ -459,4 +528,52 @@ model EventIngestionLog {
   @@unique([eventIdentity]) // Ensure idempotency
   @@index([contractId, ledger])
   @@index([txHash])
+}
+
+// ── Projection Rebuild Models (Issue #890) ──────────────────────────────────
+
+model ProjectionVersion {
+  id              String   @id @default(uuid())
+  vaultId         String
+  version         Int      // Incremental version number
+  projectionType  String   // vault_balance | share_supply | deposits | withdrawals | harvests | rebalances
+  
+  rebuiltFromLedger Int    // Starting ledger for rebuild
+  rebuiltToLedger Int      // Ending ledger for rebuild
+  eventCount      Int      // Number of events consumed
+  
+  status          String   @default("ACTIVE") // ACTIVE | SUPERSEDED | AUDIT_FAILED
+  auditStatus     String?  // PASSED | FAILED | DRIFT_DETECTED
+  auditDrift      Float?   // Discrepancy if audit failed
+  
+  metadata        Json?    // Additional rebuild metadata
+  createdAt       DateTime @default(now())
+  supersededAt    DateTime?
+  
+  @@unique([vaultId, projectionType, version])
+  @@index([vaultId, projectionType, status])
+  @@index([status, createdAt])
+}
+
+model ProjectionAuditLog {
+  id              String   @id @default(uuid())
+  projectionVersionId String
+  vaultId         String
+  projectionType  String
+  
+  auditType       String   // FULL_REBUILD | AUDIT_ONLY | INCREMENTAL
+  expectedState   Json     // Expected values from rebuild
+  actualState     Json     // Current projection state
+  
+  hasDrift        Boolean  @default(false)
+  driftDetails    Json?    // Detailed drift information
+  firstDivergentLedger Int?
+  firstDivergentEvent  String?
+  
+  auditedAt       DateTime @default(now())
+  auditedBy       String?  // CLI | SCHEDULED | MANUAL
+  
+  @@index([projectionVersionId])
+  @@index([vaultId, auditType, auditedAt])
+  @@index([hasDrift, auditedAt])
 }
