@@ -17,11 +17,16 @@ import {
   Layers,
   Clock,
   Info,
+  Rows3,
+  Grid2x2,
+  Maximize2,
 } from "lucide-react";
 import { apiUrl } from "../../lib/api";
 import { LiquidityBufferPanel } from "./LiquidityBufferPanel";
 import { computeDecayedFreshnessConfidence } from "./freshnessDecay";
 import { RISK_EXPLANATIONS, RiskLevel } from "../../config/riskConfig";
+import { useDensity } from "../../context/DensityContext";
+import type { DensityMode } from "../../context/DensityContext";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -273,6 +278,7 @@ function SkeletonSummary() {
 
 export default function ApyDashboard() {
   const reducedMotion = useReducedMotion();
+  const { density, setDensity } = useDensity();
   const [isFeeModalOpen, setIsFeeModalOpen] = useState(false);
   const [apyData, setApyData] = useState<ApyEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -641,7 +647,28 @@ export default function ApyDashboard() {
         </div>
 
         {/* View Toggle */}
-        <div className="glass-card flex overflow-hidden p-1 gap-1">
+        <div className="flex items-center gap-3">
+          {/* Density Toggle */}
+          <div className="glass-card flex overflow-hidden p-1 gap-1">
+            {(["compact", "comfortable", "spacious"] as DensityMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setDensity(mode)}
+                aria-pressed={density === mode}
+                aria-label={`${mode} density`}
+                className={`density-toggle px-2 py-1.5 rounded-lg text-[10px] font-semibold transition-all ${
+                  density === mode
+                    ? "bg-[#6C5DD3] text-white"
+                    : "text-gray-400 hover:text-white"
+                }`}
+                title={`${mode.charAt(0).toUpperCase() + mode.slice(1)} density`}
+              >
+                {mode === "compact" ? <Rows3 size={12} /> : mode === "spacious" ? <Maximize2 size={12} /> : <Grid2x2 size={12} />}
+              </button>
+            ))}
+          </div>
+
+          <div className="glass-card flex overflow-hidden p-1 gap-1">
           <button
             onClick={() => setViewMode("grid")}
             aria-pressed={viewMode === "grid"}
@@ -666,6 +693,7 @@ export default function ApyDashboard() {
             <BarChart3 size={14} className="inline mr-1.5" />
             Table
           </button>
+          </div>
         </div>
       </div>
 

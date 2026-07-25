@@ -7,6 +7,17 @@ export type WalletAddressType = "account" | "contract";
 
 export type VerificationStatus = "verified" | "degraded";
 
+export type SessionPermission = "read" | "sign" | "trade" | "govern";
+
+export interface SessionOrigin {
+  /** Browser tab ID for cross-tab correlation */
+  tabId: string;
+  /** Origin URL that created the session */
+  origin: string;
+  /** User-agent string at connection time */
+  userAgent?: string;
+}
+
 export interface WalletSession {
   walletAddress: string;
   walletAddressType: WalletAddressType;
@@ -18,6 +29,14 @@ export interface WalletSession {
   verificationStatus: VerificationStatus;
   connectedAt?: string;
   lastActivityAt?: string;
+  /** When the session was last verified against the backend */
+  lastVerifiedAt?: string;
+  /** Active permissions granted to this session */
+  permissions?: SessionPermission[];
+  /** Origin metadata for this session */
+  origin?: SessionOrigin;
+  /** Whether the provider is confirmed available in this browser */
+  providerAvailable?: boolean;
 }
 
 export interface ConnectWalletOptions {
