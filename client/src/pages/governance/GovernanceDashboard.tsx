@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { ShieldCheck, Users, FileSignature } from "lucide-react";
+import { useState, useMemo } from "react";
+import { ShieldCheck, Users, FileSignature, AlertCircle } from "lucide-react";
 import { useWallet } from "../../context/useWallet";
 import { useGovernanceStore } from "./useGovernanceStore";
 import TransactionBuilder from "./TransactionBuilder";
 import PendingTransactionCard from "./PendingTransactionCard";
 import GovernanceForecast from "./GovernanceForecast";
 import type { GovernanceConfig, PendingTransaction } from "./types";
+import { validateSignerSet, validateThreshold } from "./validation";
 
 export default function GovernanceDashboard() {
   const { walletAddress, isConnected } = useWallet();
@@ -21,6 +22,26 @@ export default function GovernanceDashboard() {
   const [showConfig, setShowConfig] = useState(false);
   const [configDraft, setConfigDraft] = useState<GovernanceConfig>(config);
 
+  /** Field-level validation derived from the current draft. */
+  const configValidation = useMemo(() => {
+    const signerLines = configDraft.signers.filter((s) => s.trim() !== "");
+    const signerResult = validateSignerSet(signerLines);
+    const thresholdResult = validateThreshold(
+      configDraft.threshold,
+      signerLines.length,
+    );
+    const allErrors = [
+      ...signerResult.errors,
+      ...(thresholdResult.error ? [thresholdResult.error] : []),
+    ];
+    return {
+      isValid: signerResult.isValid && thresholdResult.isValid,
+      signerErrors: signerResult.errors,
+      thresholdError: thresholdResult.error,
+      allErrors,
+    };
+  }, [configDraft]);
+
   const isSigner =
     walletAddress !== null && config.signers.includes(walletAddress);
 
@@ -29,6 +50,7 @@ export default function GovernanceDashboard() {
   const executedTxns = transactions.filter((t) => t.status === "executed");
 
   function handleSaveConfig() {
+    if (!configValidation.isValid) return;
     updateConfig(configDraft);
     setShowConfig(false);
   }
@@ -93,10 +115,13 @@ export default function GovernanceDashboard() {
         <div className="glass-card p-6 space-y-4">
           <h3 className="text-lg font-bold">Signer Configuration</h3>
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label htmlFor="signers-textarea" className="block text-sm text-gray-400 mb-1">
               Signer Addresses (one per line)
             </label>
             <textarea
+              id="signers-textarea"
+              aria-describedby={configValidation.signerErrors.length > 0 ? "signer-errors" : undefined}
+              aria-invalid={configValidation.signerErrors.length > 0}
               value={configDraft.signers.join("\n")}
               onChange={(e) =>
                 setConfigDraft((prev) => ({
@@ -105,28 +130,64 @@ export default function GovernanceDashboard() {
                 }))
               }
               rows={5}
-              className="w-full bg-[#1a1a2e] border border-gray-700 rounded-lg px-4 py-2 text-white font-mono text-sm"
+              className={`w-full bg-[#1a1a2e] border rounded-lg px-4 py-2 text-white font-mono text-sm ${
+                configValidation.signerErrors.length > 0
+                  ? "border-red-500/60"
+                  : "border-gray-700"
+              }`}
               placeholder="GABC...&#10;GDEF...&#10;GHIJ..."
             />
+            {configValidation.signerErrors.length > 0 && (
+              <ul
+                id="signer-errors"
+                role="alert"
+                className="mt-1 space-y-0.5"
+                aria-label="Signer validation errors"
+              >
+                {configValidation.signerErrors.map((err, i) => (
+                  <li key={i} className="flex items-center gap-1.5 text-xs text-red-400">
+                    <AlertCircle size={12} className="flex-shrink-0" />
+                    {err.message}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <div className="flex gap-4">
             <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-1">
+              <label htmlFor="threshold-input" className="block text-sm text-gray-400 mb-1">
                 Threshold
               </label>
               <input
+                id="threshold-input"
                 type="number"
                 min={1}
-                max={configDraft.signers.length}
+                max={configDraft.signers.filter((s) => s.trim()).length || undefined}
                 value={configDraft.threshold}
+                aria-invalid={configValidation.thresholdError !== null}
+                aria-describedby={configValidation.thresholdError ? "threshold-error" : undefined}
                 onChange={(e) =>
                   setConfigDraft((prev) => ({
                     ...prev,
                     threshold: parseInt(e.target.value) || 1,
                   }))
                 }
-                className="w-full bg-[#1a1a2e] border border-gray-700 rounded-lg px-4 py-2 text-white"
+                className={`w-full bg-[#1a1a2e] border rounded-lg px-4 py-2 text-white ${
+                  configValidation.thresholdError
+                    ? "border-red-500/60"
+                    : "border-gray-700"
+                }`}
               />
+              {configValidation.thresholdError && (
+                <p
+                  id="threshold-error"
+                  role="alert"
+                  className="mt-1 flex items-center gap-1.5 text-xs text-red-400"
+                >
+                  <AlertCircle size={12} className="flex-shrink-0" />
+                  {configValidation.thresholdError.message}
+                </p>
+              )}
             </div>
             <div className="flex-1">
               <label className="block text-sm text-gray-400 mb-1">
@@ -147,7 +208,14 @@ export default function GovernanceDashboard() {
           </div>
           <button
             onClick={handleSaveConfig}
-            className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold px-6 py-2 rounded-lg"
+            disabled={!configValidation.isValid}
+            aria-disabled={!configValidation.isValid}
+            title={
+              !configValidation.isValid
+                ? "Fix validation errors before saving"
+                : undefined
+            }
+            className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold px-6 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
           >
             Save Configuration
           </button>

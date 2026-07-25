@@ -8,6 +8,7 @@ import {
 import { lazy, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import Vault from "./components/Vault";
+import { getFeatureFlags } from "./utils/featureFlags";
 const ApyDashboard = lazy(() => import("./components/dashboard/ApyDashboard"));
 const AIAdvisor = lazy(() => import("./components/AIAdvisor"));
 const PortfolioPage = lazy(() => import("./components/portfolio/PortfolioPage"));
@@ -33,6 +34,32 @@ const StrategyComparison = lazy(() => import("./pages/strategy/StrategyCompariso
 const StrategyLeaderboard = lazy(() => import("./pages/leaderboard/StrategyLeaderboard"));
 const TreasurySimulation = lazy(() => import("./pages/treasury/TreasurySimulation"));
 const WalletSessionReview = lazy(() => import("./auth/WalletSessionReview"));
+// ── Experimental analytics panels (feature-flag gated) ──────────────────────
+const PortfolioAttributionPanel = lazy(
+  () => import("./features/analytics/PortfolioAttributionPanel"),
+);
+const StrategyHealthPanel = lazy(
+  () => import("./features/analytics/StrategyHealthPanel"),
+);
+// Resolve flags once at module load time — stable reference for the router
+const _featureFlags = getFeatureFlags();
+
+/** Wrapper that injects the connected wallet address into PortfolioAttributionPanel. */
+function PortfolioAttributionRoute() {
+  const { walletAddress } = useWallet();
+  if (!walletAddress) {
+    return (
+      <div className="text-gray-400 text-center py-12">
+        Connect your wallet to view portfolio attribution.
+      </div>
+    );
+  }
+  return (
+    <RouteBoundary>
+      <PortfolioAttributionPanel walletAddress={walletAddress} />
+    </RouteBoundary>
+  );
+}
 const FragmentationDashboard = lazy(() =>
   import("./features/fragmentation").then((m) => ({ default: m.FragmentationDashboard })),
 );
@@ -427,6 +454,27 @@ const router = createBrowserRouter([
           </RouteBoundary>
         ),
       },
+      // ── Experimental analytics routes (feature-flag gated) ──────────────
+      ...(_featureFlags.experimentalAnalytics || _featureFlags.experimentalPortfolioAttribution
+        ? [
+            {
+              path: "/analytics/attribution",
+              element: <PortfolioAttributionRoute />,
+            },
+          ]
+        : []),
+      ...(_featureFlags.experimentalAnalytics || _featureFlags.experimentalStrategyHealth
+        ? [
+            {
+              path: "/analytics/strategy-health",
+              element: (
+                <RouteBoundary>
+                  <StrategyHealthPanel />
+                </RouteBoundary>
+              ),
+            },
+          ]
+        : []),
     ],
   },
 ]);
