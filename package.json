@@ -6,7 +6,8 @@
     "smoke-test:node": "node scripts/smoke-test.js",
     "smoke-test:portable": "node scripts/smoke-test.js",
     "validate-workspace": "node scripts/validate-workspace.js",
-    "test:provenance": "vitest run tests/services/provenance.test.ts --coverage"
+    "test:provenance": "vitest run tests/services/provenance.test.ts --coverage",
+    "setup:doctor": "node scripts/setup-doctor.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",

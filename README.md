@@ -28,6 +28,18 @@ git clone https://github.com/YOUR_GITHUB_NAME/StellarYield.git
 cd StellarYield
 ```
 
+### Setup Doctor
+
+After cloning (and again any time something feels off before running tests), run the setup doctor to check your toolchain and workspace in one pass:
+
+```bash
+node scripts/setup-doctor.js
+# or
+npm run setup:doctor
+```
+
+It checks Node.js, npm, Rust, cargo, and the Stellar/Soroban CLI; whether each workspace (`client/`, `server/`, `contracts/`, `backend/keepers/`, `backend/rewards/`, `packages/sdk/`) has its dependencies installed; and whether each workspace's `.env.example` has been copied to a real env file — printing a concise remediation command for anything missing. See [docs/contributor-guide.md](./docs/contributor-guide.md#setup-doctor) for what each check means and how to read the output.
+
 ### Frontend Setup
 
 ```bash

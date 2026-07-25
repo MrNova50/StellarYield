@@ -4,6 +4,26 @@ This document maps [GitHub Actions workflows](../.github/workflows/) to what the
 
 ---
 
+## Setup Doctor
+
+Before debugging a confusing local test or build failure, run the setup doctor:
+
+```bash
+node scripts/setup-doctor.js
+# or
+npm run setup:doctor
+```
+
+It checks three things and prints a remediation command for anything it finds missing:
+
+1. **Toolchain** — Node.js 20+, npm 10+ (blocking: nothing in this repo runs without them), and Rust/cargo/the Stellar (or Soroban) CLI (recommended, only needed for `contracts/` work).
+2. **Workspace dependencies** — whether `node_modules` exists in each npm workspace (`client/`, `server/`, `contracts/`, `backend/keepers/`, `backend/rewards/`, `packages/sdk/`). Missing ones print the exact `cd <dir> && npm ci` to run.
+3. **Environment files** — whether each workspace's `.env.example` is present (its absence is a blocking, corrupted-checkout signal) and whether the real `.env`/`.env.local` derived from it exists yet.
+
+Output uses `✅` for OK, `⚠️` for a non-blocking gap relevant only to certain workspaces, and `❌` for a blocking issue. The script exits non-zero only when a `❌` is present — a fresh clone with no `node_modules` installed anywhere is expected to show several `⚠️` lines and still exit `0`; that's the tool telling you what to run next, not that anything is broken. See [docs/deployment-environment-matrix.md](./deployment-environment-matrix.md) for what to put in each `.env` file once it's copied.
+
+---
+
 ## Quick reference: blocking vs advisory
 
 The table below reflects **`continue-on-error`**, conditional `if:` steps, and job-level settings in the workflow files—not the Vercel dashboard or optional org-level rules.
