@@ -62,8 +62,18 @@ export class KeeperSigner {
     contractId: string,
     method: string,
     args: xdr.ScVal[] = [],
+    options?: { requiredSequence?: number; fencingToken?: number; persistRecord?: (record: import('../queues/types').JobAttemptRecord) => Promise<void> },
   ): Promise<string> {
     const account = await this.server.getAccount(this.keypair.publicKey());
+
+    if (options?.requiredSequence !== undefined) {
+      const currentSequence = Number((account as any).sequence);
+      if (currentSequence !== options.requiredSequence) {
+        throw new Error(
+          `SEQUENCE_MISMATCH: expected sequence ${options.requiredSequence}, got ${currentSequence}`,
+        );
+      }
+    }
 
     const contract = new Contract(contractId);
     const op = contract.call(method, ...args);
@@ -106,6 +116,21 @@ export class KeeperSigner {
 
     const hash = sendResult.hash;
     logger.info({ hash, method, contractId }, 'Transaction submitted');
+
+    if (options?.persistRecord && options.fencingToken !== undefined) {
+      await options.persistRecord({
+        jobId: hash,
+        queueName: 'compound',
+        state: 'submitted',
+        attemptNumber: 0,
+        fencingToken: options.fencingToken,
+        requiredSequence: options.requiredSequence ?? 0,
+        txHash: hash,
+        claimedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        targetId: contractId,
+      });
+    }
 
     // Poll for confirmation
     await this.pollForConfirmation(hash);
