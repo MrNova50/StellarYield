@@ -1,226 +1,225 @@
+import { rpc, Keypair } from "@stellar/stellar-sdk";
 import {
-  Contract,
-  SorobanRpc,
-  Address,
-  nativeToScVal,
-  scValToNative,
-  XdrLargeInt,
-} from "@stellar/stellar-sdk";
-import type { VaultConfig, DepositParams, WithdrawParams, VaultInfo } from "../types";
+  Client as GeneratedVaultClient,
+  YIELD_VAULT_SPEC_HASH,
+  VaultError,
+} from "../generated/yield_vault";
+import { PreparedTransaction, PreparedTransactionMeta, SubmittedTransaction } from "../lifecycle";
+import { SpecMismatchError, WrongNetworkError, parseContractError } from "../errors";
+import type { VaultConfig } from "../types";
 
-/**
- * VaultClient provides a typed wrapper around the StellarYield Vault contract.
- * 
- * @remarks
- * This client handles all interactions with the YieldVault Soroban contract,
- * including deposits, withdrawals, and share management.
- * 
- * @example
- * ```typescript
- * import { VaultClient } from '@stellaryield/sdk';
- * 
- * const client = new VaultClient({
- *   contractId: 'CACT...",
- *   networkPassphrase: 'Test SDF Network ; September 2015',
- *   rpcUrl: 'https://soroban-testnet.stellar.org'
- * });
- * 
- * const shares = await client.deposit({
- *   from: 'GB...',
- *   amount: '1000000000',
- *   minSharesOut: '990000000'
- * });
- * ```
- */
+export interface PreparedMethod<TArgs, TResult> {
+  (args: TArgs): Promise<PreparedTransaction<TResult>>;
+  prepare(args: TArgs): Promise<PreparedTransaction<TResult>>;
+}
+
 export class VaultClient {
-  private config: VaultConfig;
-  private server: SorobanRpc.Server;
+  public readonly generatedClient: GeneratedVaultClient;
+  public readonly contractId: string;
+  public readonly networkPassphrase: string;
+  public readonly rpcUrl: string;
+  public readonly specHash: string;
 
   constructor(config: VaultConfig) {
-    this.config = config;
-    this.server = new SorobanRpc.Server(config.rpcUrl, {
-      allowHttp: config.rpcUrl.startsWith("http://"),
+    this.contractId = config.contractId;
+    this.networkPassphrase = config.networkPassphrase;
+    this.rpcUrl = config.rpcUrl;
+    this.specHash = config.specHash || YIELD_VAULT_SPEC_HASH;
+
+    if (config.specHash && config.specHash !== YIELD_VAULT_SPEC_HASH) {
+      throw new SpecMismatchError(YIELD_VAULT_SPEC_HASH, config.specHash);
+    }
+
+    this.generatedClient = new GeneratedVaultClient({
+      contractId: this.contractId,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
     });
+
+    this.initMethods();
   }
 
-  /**
-   * Deposit tokens into the vault and receive vault shares.
-   * 
-   * @param params - Deposit parameters including from address, amount, and optional min shares
-   * @returns Promise resolving to the number of shares minted
-   * 
-   * @throws If the deposit amount is zero or slippage protection is triggered
-   * 
-   * @remarks
-   * The first depositor receives shares at a 1:1 ratio with assets.
-   * Subsequent deposits receive shares proportional to the current share price.
-   * Use `minSharesOut` to protect against slippage during the deposit.
-   */
-  async deposit(params: DepositParams): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-    const fromAddress = Address.fromString(params.from);
-    const amount = new XdrLargeInt("i128", params.amount);
-    const minSharesOut = new XdrLargeInt("i128", params.minSharesOut ?? "0");
-
-    const result = await this.server.simulateTransaction(
-      contract.call(
-        "deposit",
-        fromAddress.toScVal(),
-        amount.toScVal(),
-        minSharesOut.toScVal()
-      )
+  private initMethods() {
+    this.deposit = Object.assign(
+      (args: { from: string; amount: bigint; min_shares_out?: bigint }) =>
+        this.prepareStateChangingTx<bigint>("deposit", {
+          from: args.from,
+          amount: args.amount,
+          min_shares_out: args.min_shares_out ?? 0n,
+        }),
+      {
+        prepare: (args: { from: string; amount: bigint; min_shares_out?: bigint }) =>
+          this.prepareStateChangingTx<bigint>("deposit", {
+            from: args.from,
+            amount: args.amount,
+            min_shares_out: args.min_shares_out ?? 0n,
+          }),
+      }
     );
 
-    const shares = scValToNative(result.result!.retval) as bigint;
-    return shares.toString();
-  }
-
-  /**
-   * Withdraw tokens from the vault by burning vault shares.
-   * 
-   * @param params - Withdraw parameters including to address and number of shares
-   * @returns Promise resolving to the amount of tokens withdrawn
-   * 
-   * @throws If the user has insufficient shares
-   */
-  async withdraw(params: WithdrawParams): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-    const toAddress = Address.fromString(params.to);
-    const shares = new XdrLargeInt("i128", params.shares);
-
-    const result = await this.server.simulateTransaction(
-      contract.call(
-        "withdraw",
-        toAddress.toScVal(),
-        shares.toScVal()
-      )
+    this.withdraw = Object.assign(
+      (args: { to: string; shares: bigint }) =>
+        this.prepareStateChangingTx<bigint>("withdraw", args),
+      {
+        prepare: (args: { to: string; shares: bigint }) =>
+          this.prepareStateChangingTx<bigint>("withdraw", args),
+      }
     );
 
-    const amount = scValToNative(result.result!.retval) as bigint;
-    return amount.toString();
-  }
-
-  /**
-   * Get the number of vault shares held by a user.
-   * 
-   * @param user - The user's wallet address
-   * @returns The number of shares owned by the user
-   */
-  async getShares(user: string): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-    const userAddress = Address.fromString(user);
-
-    const result = await this.server.simulateTransaction(
-      contract.call("get_shares", userAddress.toScVal())
+    this.harvest = Object.assign(
+      (args: { caller: string; min_amount_out?: bigint }) =>
+        this.prepareStateChangingTx<bigint>("harvest", {
+          caller: args.caller,
+          min_amount_out: args.min_amount_out ?? 0n,
+        }),
+      {
+        prepare: (args: { caller: string; min_amount_out?: bigint }) =>
+          this.prepareStateChangingTx<bigint>("harvest", {
+            caller: args.caller,
+            min_amount_out: args.min_amount_out ?? 0n,
+          }),
+      }
     );
 
-    const shares = scValToNative(result.result!.retval) as bigint;
-    return shares.toString();
-  }
-
-  /**
-   * Get total vault shares in circulation.
-   * 
-   * @returns Total number of shares
-   */
-  async totalShares(): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-
-    const result = await this.server.simulateTransaction(
-      contract.call("total_shares")
+    this.rebalance = Object.assign(
+      (args: { caller: string; target: string; amount: bigint }) =>
+        this.prepareStateChangingTx<void>("rebalance", args),
+      {
+        prepare: (args: { caller: string; target: string; amount: bigint }) =>
+          this.prepareStateChangingTx<void>("rebalance", args),
+      }
     );
 
-    const total = scValToNative(result.result!.retval) as bigint;
-    return total.toString();
-  }
-
-  /**
-   * Get total assets held by the vault.
-   * 
-   * @returns Total assets in the vault's base token
-   */
-  async totalAssets(): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-
-    const result = await this.server.simulateTransaction(
-      contract.call("total_assets")
+    this.emergencyWithdraw = Object.assign(
+      (args: { to: string; shares: bigint }) =>
+        this.prepareStateChangingTx<bigint>("emergency_withdraw", args),
+      {
+        prepare: (args: { to: string; shares: bigint }) =>
+          this.prepareStateChangingTx<bigint>("emergency_withdraw", args),
+      }
     );
-
-    const total = scValToNative(result.result!.retval) as bigint;
-    return total.toString();
   }
 
-  /**
-   * Get comprehensive vault information.
-   * 
-   * @returns Object containing total shares, total assets, token, and admin addresses
-   */
-  async getInfo(): Promise<VaultInfo> {
-    const contract = new Contract(this.config.contractId);
+  // Callable method interfaces
+  public deposit!: PreparedMethod<
+    { from: string; amount: bigint; min_shares_out?: bigint },
+    bigint
+  >;
 
-    const [sharesResult, assetsResult, tokenResult, adminResult] = await Promise.all([
-      this.server.simulateTransaction(contract.call("total_shares")),
-      this.server.simulateTransaction(contract.call("total_assets")),
-      this.server.simulateTransaction(contract.call("get_token")),
-      this.server.simulateTransaction(contract.call("get_admin")),
-    ]);
+  public withdraw!: PreparedMethod<
+    { to: string; shares: bigint },
+    bigint
+  >;
 
-    return {
-      totalShares: scValToNative(sharesResult.result!.retval).toString(),
-      totalAssets: scValToNative(assetsResult.result!.retval).toString(),
-      token: scValToNative(tokenResult.result!.retval),
-      admin: scValToNative(adminResult.result!.retval),
-    };
+  public harvest!: PreparedMethod<
+    { caller: string; min_amount_out?: bigint },
+    bigint
+  >;
+
+  public rebalance!: PreparedMethod<
+    { caller: string; target: string; amount: bigint },
+    void
+  >;
+
+  public emergencyWithdraw!: PreparedMethod<
+    { to: string; shares: bigint },
+    bigint
+  >;
+
+  private async prepareStateChangingTx<TResult>(
+    methodName: string,
+    args: Record<string, any>
+  ): Promise<PreparedTransaction<TResult>> {
+    try {
+      const fn = (this.generatedClient as any)[methodName];
+      if (typeof fn !== "function") {
+        throw new Error(`Unknown contract method '${methodName}'`);
+      }
+
+      const assembled = await fn.call(this.generatedClient, args);
+      const rawXdr = assembled.built ? assembled.built.toXDR() : assembled.simulation;
+
+      const meta: PreparedTransactionMeta<TResult> = {
+        simulationResult: (assembled.result?.unwrap?.() ?? assembled.result) as TResult,
+        footprint: assembled.simulation?.footprint || "",
+        authEntries: assembled.simulation?.auth || [],
+        minResourceFee: assembled.simulation?.minResourceFee || "0",
+        transactionData: assembled.simulation?.transactionData || "",
+        latestLedger: assembled.simulation?.latestLedger || 0,
+        validUntilLedger: (assembled.simulation?.latestLedger || 0) + 100,
+        contractId: this.contractId,
+        networkPassphrase: this.networkPassphrase,
+        method: methodName,
+        argsHash: JSON.stringify(args),
+        specHash: this.specHash,
+      };
+
+      return new PreparedTransaction<TResult>(rawXdr, meta);
+    } catch (error) {
+      throw parseContractError(error);
+    }
   }
 
-  /**
-   * Convert an asset amount to the equivalent number of shares.
-   * 
-   * @param assets - Amount of assets to convert
-   * @returns Equivalent number of shares at current price
-   */
-  async convertToShares(assets: string): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-    const assetsVal = new XdrLargeInt("i128", assets);
-
-    const result = await this.server.simulateTransaction(
-      contract.call("convert_to_shares", assetsVal.toScVal())
-    );
-
-    return scValToNative(result.result!.retval).toString();
+  // Read-only view methods
+  async totalAssets(): Promise<bigint> {
+    try {
+      const tx = await this.generatedClient.total_assets();
+      return BigInt((tx.result as any) || 0n);
+    } catch (e) {
+      throw parseContractError(e);
+    }
   }
 
-  /**
-   * Convert a number of shares to the equivalent asset amount.
-   * 
-   * @param shares - Number of shares to convert
-   * @returns Equivalent amount of assets at current price
-   */
-  async convertToAssets(shares: string): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-    const sharesVal = new XdrLargeInt("i128", shares);
-
-    const result = await this.server.simulateTransaction(
-      contract.call("convert_to_assets", sharesVal.toScVal())
-    );
-
-    return scValToNative(result.result!.retval).toString();
+  async totalShares(): Promise<bigint> {
+    try {
+      const tx = await this.generatedClient.total_shares();
+      return BigInt((tx.result as any) || 0n);
+    } catch (e) {
+      throw parseContractError(e);
+    }
   }
 
-  /**
-   * Preview how many shares would be minted for a given deposit amount.
-   * 
-   * @param assets - Amount of assets to preview deposit
-   * @returns Number of shares that would be minted
-   */
-  async previewDeposit(assets: string): Promise<string> {
-    const contract = new Contract(this.config.contractId);
-    const assetsVal = new XdrLargeInt("i128", assets);
+  async getShares(user: string): Promise<bigint> {
+    try {
+      const tx = await this.generatedClient.get_shares({ user });
+      return BigInt((tx.result as any) || 0n);
+    } catch (e) {
+      throw parseContractError(e);
+    }
+  }
 
-    const result = await this.server.simulateTransaction(
-      contract.call("preview_deposit", assetsVal.toScVal())
-    );
+  async getAdmin(): Promise<string> {
+    try {
+      const tx = await this.generatedClient.get_admin();
+      return (tx.result as any)?.unwrap?.() || String(tx.result || "");
+    } catch (e) {
+      throw parseContractError(e);
+    }
+  }
 
-    return scValToNative(result.result!.retval).toString();
+  async getToken(): Promise<string> {
+    try {
+      const tx = await this.generatedClient.get_token();
+      return (tx.result as any)?.unwrap?.() || String(tx.result || "");
+    } catch (e) {
+      throw parseContractError(e);
+    }
+  }
+
+  async getFlashLoanFee(amount: bigint): Promise<bigint> {
+    try {
+      const tx = await this.generatedClient.get_flash_loan_fee({ amount: amount as any });
+      return BigInt((tx.result as any) || 0n);
+    } catch (e) {
+      throw parseContractError(e);
+    }
+  }
+
+  // Recovery helper
+  public recoverTransaction<T = unknown>(hash: string): SubmittedTransaction<T> {
+    return SubmittedTransaction.fromHash<T>(hash, {
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+    });
   }
 }

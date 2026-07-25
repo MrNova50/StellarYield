@@ -96,3 +96,45 @@ VITE_APP_URL=http://localhost:5173
 - Contract IDs must point at the network selected by `VITE_NETWORK_PASSPHRASE` and `VITE_SOROBAN_RPC_URL`. Mixing testnet contracts with mainnet RPC, or vice versa, is the most common deploy-time bug.
 - Do not promote a Preview build to Production without verifying the environment-specific values; Vercel scopes variables per environment so a missing Production override can cause confusing runtime behavior.
 - For rotation rollouts, change `VITE_VAULT_CONTRACT_ID` first, redeploy, then retire `VITE_CONTRACT_ID` in a follow-up release once the override has been verified.
+
+## Preview environment setup
+
+Vercel **Preview** deployments are special — they run on `*.vercel.app` domains, not localhost. The frontend must be able to reach a backend; without `VITE_API_BASE_URL` set, deployments will fail gracefully with a clear "Backend not configured" message.
+
+### Setting Preview environment variables in Vercel
+
+1. Go to your project **Settings → Environment Variables**.
+2. For each preview variable, select the scope **Preview** (or **Preview + Production** if the value is the same).
+3. Ensure `VITE_API_BASE_URL` is set to a reachable backend URL (staging server, ngrok tunnel, or internal VPC address depending on your infrastructure).
+4. Redeploy the preview after adding or updating environment variables.
+
+### Common preview configurations
+
+| Setup | VITE_API_BASE_URL | Notes |
+| --- | --- | --- |
+| **Staging backend** | `https://api-staging.example.com` | Most common — connects preview UI to a shared staging server. |
+| **Local tunnel** | `https://YOUR-NGROK-URL.ngrok.io` | Useful for testing with a local backend; use ngrok, localtunnel, or similar. |
+| **VPC/private backend** | `https://internal-api.local` | For internal deploys; requires Vercel Pro + custom domains. |
+| **No backend** | _(not set)_ | Preview will show "Backend URL not configured" gracefully; useful for UI-only reviews. |
+
+### Example Vercel environment variables (Preview scope)
+
+```
+VITE_API_BASE_URL=https://api-staging.example.com
+VITE_SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+VITE_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+VITE_CONTRACT_ID=CC...
+VITE_VAULT_CONTRACT_ID=CC...
+VITE_ZAP_CONTRACT_ID=CC...
+VITE_VAULT_TOKEN_CONTRACT_ID=CC...
+VITE_VAULT_TOKEN_SYMBOL=USDC
+VITE_VAULT_TOKEN_DECIMALS=7
+```
+
+### Testing a preview deployment
+
+After deploying a preview PR:
+1. Open the Vercel **Preview URL** in a browser.
+2. Check the browser console (F12) for `API_UNAVAILABLE` errors if the backend doesn't respond.
+3. Verify the UI loads and shows a graceful error message if the backend is not configured.
+4. If API calls fail, ensure `VITE_API_BASE_URL` is reachable and the backend CORS headers allow the Vercel domain.

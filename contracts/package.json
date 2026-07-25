@@ -1,0 +1,10 @@
+{
+  "name": "stellaryield-contracts-scripts",
+  "private": true,
+  "scripts": {
+    "test": "vitest run --reporter=verbose"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

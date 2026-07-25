@@ -1,18 +1,16 @@
 #!/usr/bin/env node
 /**
- * Print maintainer issue counts for Stellar Wave triage.
+ * Maintainer issue triage summary for Stellar Wave.
  *
  * Usage:
- *   node scripts/issue-triage.js
- *   GITHUB_REPOSITORY=owner/repo node scripts/issue-triage.js
+ *   GITHUB_TOKEN=ghp_xxx node scripts/issue-triage.js
+ *   GITHUB_TOKEN=ghp_xxx GITHUB_REPOSITORY=owner/repo node scripts/issue-triage.js
  *   node scripts/issue-triage.js owner/repo
  *
- * Set GITHUB_TOKEN to raise GitHub API rate limits.
+ * The script uses the GitHub Search API to count issues and pull requests by triage state.
  */
 
-const DEFAULT_REPOSITORY =
-  process.env.GITHUB_REPOSITORY || "Maximum-Prosper/StellarYield";
-
+const DEFAULT_REPOSITORY = process.env.GITHUB_REPOSITORY || "edehvictor/StellarYield";
 const repository = process.argv[2] || DEFAULT_REPOSITORY;
 const token = process.env.GITHUB_TOKEN;
 
@@ -32,6 +30,10 @@ const states = [
   {
     label: "Blocked Issues",
     query: `repo:${repository} is:issue is:open label:"blocked"`,
+  },
+  {
+    label: "Needs Info",
+    query: `repo:${repository} is:issue is:open label:"needs info"`,
   },
 ];
 
@@ -55,12 +57,18 @@ async function countSearchResults(query) {
 }
 
 async function runTriage() {
-  console.log(`Maintainer triage summary for ${repository}`);
+  console.log("📊 StellarYield Maintainer Triage Dashboard");
+  console.log("═".repeat(50));
+  console.log();
+  console.log(`Repository: ${repository}`);
 
   for (const state of states) {
     const count = await countSearchResults(state.query);
     console.log(`- ${state.label}: ${count}`);
   }
+
+  console.log();
+  console.log("💡 Tip: Use GitHub saved searches for detailed lists and docs/triage-process.md for the workflow.");
 }
 
 runTriage().catch((error) => {

@@ -65,6 +65,18 @@ export function getApiBaseUrl(env: ImportMetaEnv = import.meta.env): string {
   return state.baseUrl;
 }
 
+/**
+ * Safely get API base URL or null if not configured.
+ * Use this when you want to handle missing API gracefully.
+ */
+export function getApiBaseUrlOrNull(env: ImportMetaEnv = import.meta.env): string | null {
+  try {
+    return getApiBaseUrl(env);
+  } catch {
+    return null;
+  }
+}
+
 export function apiUrl(path: string, env?: ImportMetaEnv): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${getApiBaseUrl(env)}${normalizedPath}`;

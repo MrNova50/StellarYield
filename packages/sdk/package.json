@@ -7,9 +7,9 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "files": [
@@ -17,18 +17,22 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "lint": "eslint src",
-    "typecheck": "tsc --noEmit"
+    "build": "npx tsup",
+    "build:bindings": "npx tsx scripts/build-bindings.ts",
+    "verify-drift": "npx tsx scripts/verify-drift.ts",
+    "test": "npx vitest run",
+    "dev": "npx tsup --watch",
+    "typecheck": "npx tsc --noEmit"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^14.6.1"
+    "@stellar/stellar-sdk": "^14.6.1",
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.5"
   },
   "keywords": [
     "stellar",

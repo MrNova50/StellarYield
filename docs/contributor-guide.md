@@ -72,7 +72,115 @@ npm run build
 
 ---
 
-## Contracts (`ci.yml` — Soroban Contract Checks)
+## UI Snapshots & Visual Review Checklist
+
+Frontend PRs that modify UI **must** include screenshots or video recordings of the changes. This ensures reviewers can validate visual consistency, responsive design, and accessibility before merging.
+
+### When UI snapshots are required:
+
+✅ **Always include snapshots for:**
+- Changes to CSS, layouts, or styling (colors, fonts, spacing)
+- New React components or modifications to existing ones
+- Changes to responsive breakpoints or media queries
+- New forms, modals, dialogs, dropdowns, or interactive elements
+- Animation or transition changes
+- Icon or imagery updates
+
+❌ **Not required for:**
+- Pure logic refactoring with no visual impact
+- Changes to non-visual utility functions or API calls
+- Backend-only changes (no frontend code modified)
+- **Exception:** If you touch `/client` but have zero visual changes, explicitly state **"No visual changes"** in the PR description and check the box in the PR template.
+
+### Viewport requirements:
+
+Provide screenshots for the **minimum** three standard breakpoints:
+
+| Viewport | Width | Device Type | Checklist |
+|----------|-------|-------------|-----------|
+| Desktop | 1024px+ | Laptop/Desktop | Full layout, menu expanded, all features visible |
+| Tablet | 768px | iPad/Tablet | Navigation may collapse or shift; check readability |
+| Mobile | 375px | iPhone SE/Mobile | Smallest breakpoint; text should not overflow; buttons touch-friendly |
+
+**Why these sizes?** They cover the CSS media queries typically used in StellarYield and represent real device breakpoints.
+
+### How to capture screenshots:
+
+**Browser DevTools (recommended for web):**
+1. Open **DevTools** (F12 / Cmd+I)
+2. Click **Toggle device toolbar** (or Ctrl+Shift+M)
+3. Select a device or manually set width (Desktop: 1024px, Tablet: 768px, Mobile: 375px)
+4. Interact with the UI, scroll if needed
+5. **Capture:** On Mac `Cmd+Shift+4` → select area. On Windows `Win+Shift+S`. On Linux `gnome-screenshot`.
+
+**Screen recording (for interactions, animations, hover states):**
+- **Mac:** QuickTime Player (File → New Screen Recording)
+- **Windows:** Win+G → Xbox Game Bar → Record
+- **Linux:** OBS Studio
+- **Online:** Loom (no install, free), or Screencastify
+- Upload a Gist video link or create an MP4 and attach to the PR.
+
+### How to add snapshots to your PR:
+
+1. **In PR description,** include a **Screenshots** section:
+   ```markdown
+   ## Screenshots
+   
+   ### Desktop (1024px)
+   ![Desktop view](https://user-images.githubusercontent.com/...)
+   
+   ### Mobile (375px)
+   ![Mobile view](https://user-images.githubusercontent.com/...)
+   ```
+
+2. **Direct upload to PR:** Drag-and-drop images into the PR description or use GitHub's attachment dialog.
+
+3. **Vercel Preview:** In your PR checks, click the **Preview** link from Vercel to see the live version. This is the **gold standard**—reviewers can interact with the actual page instead of static screenshots.
+
+### If there are no visual changes:
+
+If you modify `/client` but the UI is unchanged (e.g., refactoring API logic, fixing accessibility without visual change):
+
+```markdown
+## UI Snapshot Checklist
+- [x] No visual changes
+
+This PR refactors the wallet context to improve performance; 
+no changes to rendered output or styling.
+```
+
+### Reviewer expectations:
+
+- **Visual regression:** Does the layout look correct? Are colors, spacing, typography consistent?
+- **Responsive design:** Do all three viewports (desktop, tablet, mobile) render correctly?
+- **Interactive states:** Hover, focus (keyboard), active, and disabled states all visible?
+- **Accessibility:** Text contrast high enough? Focus indicators clear? Buttons and links properly sized?
+- **Across browsers:** If possible, reviewers may test in Firefox, Chrome, Safari. Make responsive design a priority.
+
+### Accessibility & contrast guidelines:
+
+When providing UI snapshots, ensure:
+
+- **Text contrast:** Minimum 4.5:1 for normal text, 3:1 for large text (WCAG AA).
+  - Use a tool like [WebAIM contrast checker](https://webaim.org/resources/contrastchecker/).
+- **Focus states:** Keyboard navigation must be visible (outline or highlight around focused element).
+- **Color alone:** Do not convey information using color alone; use patterns, icons, or text labels as well.
+- **Touch targets:** Buttons and interactive elements should be at least 44x44 pixels (mobile).
+- **Readable fonts:** Use sans-serif fonts, sufficient line-height (≥1.5), and avoid all-caps for body text.
+
+For more accessibility guidance, see the [Web Content Accessibility Guidelines (WCAG 2.1)](https://www.w3.org/WAI/WCAG21/quickref/) or consult your design system.
+
+### Tools for responsive testing:
+
+- **Google Chrome DevTools:** Built-in device emulation (see above)
+- **Firefox DevTools:** Responsive Design Mode (Ctrl+Shift+M)
+- **BrowserStack:** Cloud-based testing on real devices (paid)
+- **Responsively App:** Standalone tool for multi-viewport testing (free, cross-platform)
+- **Vercel Preview:** Test the actual deployed preview URL in real browsers
+
+---
+
+
 
 **What it does:** `cargo fmt --check`, `cargo clippy` (Clippy step is `continue-on-error: true` in CI), `cargo test --workspace` with logs uploaded on test failure.
 

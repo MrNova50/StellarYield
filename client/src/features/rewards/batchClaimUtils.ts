@@ -3,6 +3,47 @@ import type { BatchClaimPreview, VaultRewardStatus, ClaimProofData } from './typ
 const PROOF_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 const ESTIMATED_FEE_STROOPS = '1000000'; // 0.1 YIELD
 
+/** Maximum number of vaults processed in a single batch claim preview page. */
+export const MAX_VAULTS_PER_PAGE = 50;
+
+export interface PaginatedBatchResult {
+    vaults: VaultRewardStatus[];
+    page: number;
+    pageSize: number;
+    totalVaults: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+}
+
+/**
+ * Paginate a flat vault list for batch-claim previews.
+ * Page is 1-indexed. Clamps pageSize to [1, MAX_VAULTS_PER_PAGE].
+ */
+export function paginateVaultResults(
+    vaults: VaultRewardStatus[],
+    page: number,
+    pageSize: number = MAX_VAULTS_PER_PAGE,
+): PaginatedBatchResult {
+    const clampedPageSize = Math.min(Math.max(1, Math.floor(pageSize)), MAX_VAULTS_PER_PAGE);
+    const clampedPage = Math.max(1, Math.floor(page));
+    const totalVaults = vaults.length;
+    const totalPages = totalVaults === 0 ? 1 : Math.ceil(totalVaults / clampedPageSize);
+    const safePage = Math.min(clampedPage, totalPages);
+    const start = (safePage - 1) * clampedPageSize;
+    const end = start + clampedPageSize;
+
+    return {
+        vaults: vaults.slice(start, end),
+        page: safePage,
+        pageSize: clampedPageSize,
+        totalVaults,
+        totalPages,
+        hasNextPage: safePage < totalPages,
+        hasPrevPage: safePage > 1,
+    };
+}
+
 /**
  * Check if a proof is stale (older than 24 hours)
  */

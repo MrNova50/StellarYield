@@ -11,7 +11,46 @@ This document outlines the weekly issue triage workflow for StellarYield maintai
 
 ## Saved Search Queries
 
-Use these GitHub searches to keep community work visible:
+Use the following saved searches and dashboard commands to keep tracking work visible:
+
+- `scripts/maintainer_saved_searches.sh` — example saved searches for quick triage (run locally and paste the output into a triage ticket).
+- `scripts/issue-triage.js` — automated dashboard showing current triage state counts (see below).
+
+### Maintainer Triage Dashboard
+
+Run this command to get a quick overview of triage-relevant issues:
+
+```bash
+GITHUB_TOKEN=ghp_xxx node scripts/issue-triage.js
+```
+
+**Output example:**
+```text
+📊 StellarYield Maintainer Triage Dashboard
+==================================================
+
+🆓 Unclaimed Wave Issues:      12
+✅ Claimed Wave Issues:        5
+👀 Wave PRs (all states):      3
+⛔ Blocked Issues:             2
+❓ Needs Info:                 1
+📈 Total Open Issues:          28
+```
+
+### GitHub Token Setup
+
+1. Visit https://github.com/settings/tokens/new
+2. Create a **Personal Access Token (Classic)** with the `repo` and `public_repo` scopes.
+3. Copy the token and save it securely:
+   ```bash
+   export GITHUB_TOKEN=ghp_xxx
+   ```
+4. Run the dashboard script:
+   ```bash
+   node scripts/issue-triage.js
+   ```
+
+### Recommended Queries
 
 | State | Query | Action |
 | --- | --- | --- |
@@ -20,9 +59,23 @@ Use these GitHub searches to keep community work visible:
 | Ready for review | `is:pr is:open label:"Stellar Wave" review:required` | Assign or request a maintainer review. |
 | Blocked issues | `is:issue is:open label:"blocked"` | Follow up on the missing input and remove the label once unblocked. |
 
+**Escalation & Handoff**
+- If something is `blocked` for more than 24 hours, ping the on-call channel with a short context message and link.
+- For `review-needed`, if no reviewer is assigned within 24 hours, post a short summary and tag the rotation-maintainers group.
+
+**Notes**
+- This process is intentionally permission-agnostic. Use labels and issue body markers rather than requiring new team membership.
+
+### Creating Saved Searches
+
+1. Go to https://github.com/edehvictor/StellarYield/issues
+2. Paste one of the query strings above into the search box
+3. Click the **Save** button (or bookmark the URL)
+4. Refer to your saved searches during triage
+
 ## Weekly Triage Workflow
 
-Every Monday, maintainers should:
+Every Monday (or on your chosen triage day), maintainers should follow this process:
 
 1. Review new issues created in the past week and apply accurate labels such as `Stellar Wave`, `bug`, `enhancement`, or `points: 200`.
 2. Run the saved searches above or `node scripts/issue-triage.js` from the repository root.
@@ -30,6 +83,13 @@ Every Monday, maintainers should:
 4. Check stale claimed issues. If there has been no response for more than seven days, ask for an update before unassigning.
 5. Review blocked issues and add a concrete next step, owner, and expected follow-up date.
 6. Move PR-backed work into review by confirming linked issues, CI status, preview deployment status, and screenshots when UI changed.
+
+### Suggested Cadence
+
+- Run the dashboard first to capture the current counts for unclaimed, claimed, blocked, and needs-info issues.
+- Review each new issue for clear acceptance criteria and assign labels where needed.
+- Ping assignees or contributors if a claimed issue has gone stale for more than seven days.
+- Keep the triage thread visible by documenting blockers and next actions.
 
 ## Public Contributor Workflow
 
@@ -46,3 +106,10 @@ Keep the claim visible in the issue thread, and ask contributors to link their P
 - If an issue is blocked for more than 24 hours, post a short context update and link the issue in the maintainer channel.
 - If a PR is ready for review for more than 24 hours, tag the reviewer rotation with the PR link and the first needed action.
 - If a contributor needs to hand off a claimed issue, ask them to leave their branch, test notes, and remaining task list in the issue.
+
+## Tools & Links
+
+- **Triage Dashboard:** `node scripts/issue-triage.js`
+- **Saved Searches:** https://github.com/edehvictor/StellarYield/issues
+- **GitHub Tokens:** https://github.com/settings/tokens
+- **Stellar Wave Program:** See root `README.md` for Wave details

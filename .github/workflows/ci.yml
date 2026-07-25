@@ -7,6 +7,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  sdk:
+    name: SDK & Spec Drift Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version 25.1.0
+
+      - name: Build YieldVault WASM
+        run: cargo build --target wasm32-unknown-unknown --release --package yield_vault
+        working-directory: contracts
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install SDK dependencies
+        working-directory: packages/sdk
+        run: npm ci
+
+      - name: Verify Contract & API Spec Drift
+        working-directory: packages/sdk
+        run: npm run verify-drift
+
+      - name: Run SDK Tests
+        working-directory: packages/sdk
+        run: npm test
+
+      - name: Build SDK Package
+        working-directory: packages/sdk
+        run: npm run build
+
   backend:
     name: Backend Checks
     runs-on: ubuntu-latest
@@ -57,8 +97,11 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
-      - name: Push Prisma schema
-        run: npx prisma db push
+      - name: Run Prisma migrations
+        run: npx prisma migrate deploy
+
+      - name: Check for unapplied schema changes
+        run: npx prisma migrate status || (echo "Unapplied schema changes detected" && exit 1)
 
       - name: Run backend tests
         run: npm test
@@ -169,6 +212,32 @@ jobs:
       - name: Fail contracts job if tests failed
         if: steps.contract_tests.outcome == 'failure'
         run: exit 1
+
+      - name: Set up Node.js for contract script tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install contract script dependencies
+        working-directory: contracts
+        run: npm ci
+
+      - name: Run contract script tests
+        working-directory: contracts
+        run: npm test
+
+      - name: Verify deployment manifest
+        working-directory: .
+        shell: bash
+        run: |
+          if [ -f contracts/scripts/deployment-manifest.json ]; then
+            node contracts/scripts/verify-manifest.js \
+              --manifest contracts/scripts/deployment-manifest.json \
+              --registry contracts/registry.json \
+              --network testnet
+          else
+            echo "No deployment manifest found — skipping verification"
+          fi
 
   readme-commands:
     name: README Command Verification

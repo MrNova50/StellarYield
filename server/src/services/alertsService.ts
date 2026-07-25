@@ -9,6 +9,11 @@
  *  - MAX_ALERTS_PER_USER caps active alerts to prevent DB bloat.
  *  - Triggered alerts are marked "triggered" and not re-evaluated (no spam).
  *  - No wallet addresses are included in outbound emails.
+ *
+ * Resilience:
+ *  - Email dispatch retries up to MAX_DELIVERY_ATTEMPTS times with exponential backoff.
+ *  - Permanently failed deliveries land in the dead-letter queue (deadLetterQueue).
+ *  - deliveryMetrics tracks sent/failed/retried/dead-lettered counts for operators.
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -20,7 +25,47 @@ const prisma = new PrismaClient();
 /** Hard cap on active alerts per wallet address. */
 export const MAX_ALERTS_PER_USER = 20;
 
+/** Maximum delivery attempts before an alert is dead-lettered. */
+export const MAX_DELIVERY_ATTEMPTS = 3;
+
+/** Base delay (ms) for exponential backoff between retries. */
+export const RETRY_BASE_DELAY_MS = 200;
+
 export type AlertCondition = "above" | "below";
+
+// ── Delivery observability ──────────────────────────────────────────────
+
+export interface DeliveryMetrics {
+  sent: number;
+  failed: number;
+  retried: number;
+  deadLettered: number;
+}
+
+export interface DeadLetterEntry {
+  to: string;
+  subject: string;
+  attempts: number;
+  lastError: string;
+  failedAt: string;
+}
+
+export const deliveryMetrics: DeliveryMetrics = {
+  sent: 0,
+  failed: 0,
+  retried: 0,
+  deadLettered: 0,
+};
+
+export const deadLetterQueue: DeadLetterEntry[] = [];
+
+export function resetDeliveryMetrics(): void {
+  deliveryMetrics.sent = 0;
+  deliveryMetrics.failed = 0;
+  deliveryMetrics.retried = 0;
+  deliveryMetrics.deadLettered = 0;
+  deadLetterQueue.length = 0;
+}
 
 export interface CreateAlertInput {
   walletAddress: string;
@@ -153,6 +198,10 @@ export async function evaluateAlerts(
 
 // ── Email dispatch ──────────────────────────────────────────────────────
 
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function dispatchAlertEmail(
   to: string,
   data: {
@@ -190,12 +239,36 @@ async function dispatchAlertEmail(
     </div>
   `;
 
-  try {
-    await sendEmail({ to, subject, html });
-  } catch (err) {
-    // Log but don't throw — a failed email should not roll back the DB update
-    console.error("[alertsService] Failed to send alert email", err);
+  let lastError: Error | unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_DELIVERY_ATTEMPTS; attempt++) {
+    try {
+      await sendEmail({ to, subject, html });
+      deliveryMetrics.sent++;
+      return;
+    } catch (err) {
+      lastError = err;
+      deliveryMetrics.failed++;
+      if (attempt < MAX_DELIVERY_ATTEMPTS) {
+        deliveryMetrics.retried++;
+        const delay = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        console.warn(`[alertsService] delivery attempt ${attempt} failed, retrying in ${delay}ms`, err);
+        await sleep(delay);
+      }
+    }
   }
+
+  // All attempts exhausted — move to dead-letter queue
+  const errorMsg = lastError instanceof Error ? lastError.message : String(lastError);
+  console.error(`[alertsService] alert email permanently failed after ${MAX_DELIVERY_ATTEMPTS} attempts, dead-lettering`, lastError);
+  deliveryMetrics.deadLettered++;
+  deadLetterQueue.push({
+    to,
+    subject,
+    attempts: MAX_DELIVERY_ATTEMPTS,
+    lastError: errorMsg,
+    failedAt: new Date().toISOString(),
+  });
 }
 
 export async function dispatchDriftAlert(

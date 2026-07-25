@@ -95,13 +95,62 @@ npm run build
 npm test
 ```
 
-### UI Snapshot Checklist for Visual Reviews
+### 🖼️ UI Snapshot Checklist for Visual Reviews
+If your PR modifies the frontend or introduces new UI components, you **must** provide UI snapshots (screenshots or short screen recordings).
 
-If your PR modifies the frontend or introduces new UI components, you **must** provide UI snapshots, screenshots, or short screen recordings.
+#### When screenshots are required:
+- ✅ Any change to CSS, layout structure, or styling
+- ✅ New React components or modifications to existing components
+- ✅ Changes to responsive breakpoints or media queries
+- ✅ Color, font, sizing, or spacing changes
+- ✅ New forms, modals, dialogs, or interactive elements
+- ❌ Pure logic refactoring with no UI impact (if applicable, mark "No visual changes")
+- ❌ Changes to non-visual backend API calls or utilities
 
-- **When required:** Any change to CSS, React components, or layout structure.
-- **Viewport checks:** Test and provide screenshots for desktop (1024px+ wide) and mobile (375px wide).
-- **No visual changes:** If your PR touches `client/` but does not change the UI, explicitly mention **"No visual changes"** in the PR description.
+#### Screenshot viewport requirements:
+Provide screenshots for these viewport sizes to validate responsive design:
+
+| Viewport | Size | Device | Notes |
+| --- | --- | --- | --- |
+| Desktop | 1024px+ width | Laptop/Desktop | Full layout, all features visible |
+| Tablet | 768px width | iPad/Tablet | Medium breakpoint, navigation changes |
+| Mobile | 375px width | iPhone SE/Mobile | Smallest breakpoint, stacked layout |
+
+**Quick capture tools:**
+- **Browser DevTools:** F12 → Toggle device toolbar → Change viewport width
+- **Screenshot:** On Mac: `Cmd + Shift + 4`. On Windows: `Win + Shift + S`. On Linux: `gnome-screenshot`.
+- **Video:** For complex interactions (scroll, hover, transitions), use a screen recorder (Loom, CleanMyMac's video recording, OBS) and upload as a Gist video link.
+
+#### How to include UI snapshots in your PR:
+1. **In the PR description**, under **Screenshots (if applicable):**
+   ```markdown
+   ![Desktop view at 1024px](url-to-screenshot)
+   ![Mobile view at 375px](url-to-screenshot)
+   ```
+2. **Or upload directly to GitHub PR:** Drag-and-drop images or use the attachment UI when editing the PR description.
+3. **Mark the checklist:** In the PR template, check the boxes for which viewports you've tested.
+
+#### If there are no visual changes:
+If your PR touches the `/client` directory but does **not** change the UI (e.g., refactoring logic, updating API calls, fixing accessibility without visual changes), explicitly mention:
+```markdown
+## UI Snapshot Checklist
+- [x] No visual changes
+
+This PR refactors API call logic in the dashboard without changing the visual appearance.
+```
+
+#### Reviewer expectations:
+- Reviewers will **check for visual regressions**, broken layouts, and responsive behavior.
+- Reviewers may ask for additional viewport sizes if mobile or tablet appearance is unclear.
+- During review, click the **Vercel Preview** link (usually in the PR checks) to interact with the live version.
+
+#### Accessibility & contrast:
+When including UI screenshots, ensure:
+- Text is legible (good contrast against background).
+- Focus states are visible (keyboard navigation).
+- Color is not the only way to convey information (use icons, labels, patterns too).
+
+For detailed accessibility guidance, see [docs/contributor-guide.md](./docs/contributor-guide.md).
 
 ### Core Contribution Rules
 
@@ -130,6 +179,21 @@ Include a link to the failed workflow run or Vercel deployment log, your branch 
 ### Running Workflows Locally
 
 Use the command blocks in [docs/contributor-guide.md](./docs/contributor-guide.md) for parity with `.github/workflows/ci.yml` and related workflows. Optional: [nektos/act](https://github.com/nektos/act) with Docker. You can also trigger a run on GitHub with `gh workflow run CI --ref "$(git branch --show-current)"`.
+
+## 🎯 Release Readiness (Wave Submissions)
+
+Before requesting a review on a **Stellar Wave** PR, please review the **[Release Readiness Checklist](./docs/release-checklist.md#stellar-wave-submission-checklist)** to ensure all items are checked:
+
+- ✅ Issue linking (`Fixes #ISSUE_NUMBER`)
+- ✅ CI checks pass (GitHub Actions, Vercel Preview)
+- ✅ Code quality (lint, test, coverage)
+- ✅ Visual design (screenshots for Desktop & Mobile if UI changed)
+- ✅ Documentation (comments, NatSpec, README updates)
+- ✅ Smoke test (manual verification in Vercel Preview)
+- ✅ Security (no hardcoded secrets; auth checks in place)
+- ✅ PR template completed (all checkboxes checked)
+
+See [docs/release-checklist.md](./docs/release-checklist.md) for the full checklist and guidance on deployment (for maintainers).
 
 ## Contract Security
 

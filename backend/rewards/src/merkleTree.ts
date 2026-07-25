@@ -1,5 +1,25 @@
 import { createHash } from "crypto";
 
+/** Maximum depth of a Merkle proof (supports trees up to 2^20 ≈ 1 M recipients). */
+export const MAX_PROOF_DEPTH = 20;
+
+/** Maximum number of entries allowed in a single batch distribution. */
+export const MAX_BATCH_ENTRIES = 10_000;
+
+/**
+ * Validate that a proof array does not exceed the maximum allowed depth.
+ * Returns an object so callers can surface a human-readable reason.
+ */
+export function validateProofSize(proof: string[]): { valid: boolean; reason?: string } {
+  if (proof.length > MAX_PROOF_DEPTH) {
+    return {
+      valid: false,
+      reason: `Proof depth ${proof.length} exceeds maximum allowed depth of ${MAX_PROOF_DEPTH}`,
+    };
+  }
+  return { valid: true };
+}
+
 /**
  * Represents a single reward allocation for a user.
  */
