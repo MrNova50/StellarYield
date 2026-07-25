@@ -234,6 +234,31 @@ export function decodeTransactionError(raw: string): DecodedError {
         };
     }
 
+    // Partial submission / unknown finality: the transaction was sent (it has
+    // a hash) but polling never observed a terminal SUCCESS/FAILED status
+    // before the deadline. It may still land on-chain, so resubmitting is
+    // unsafe until finality is confirmed.
+    if (/pending inclusion timed out|may still land on-chain|transaction timed out/i.test(safeRaw)) {
+        return {
+            title: "Submission Status Unknown",
+            message: "Your transaction was submitted but its final status could not be confirmed in time.",
+            suggestion: "Check the transaction hash on an explorer before retrying, to avoid submitting a duplicate.",
+            raw: safeRaw,
+        };
+    }
+
+    // Finalization failure: the network reached a terminal FAILED status for
+    // a transaction that was actually included in a ledger (as opposed to a
+    // simulation-time contract error, which is decoded above via its error code).
+    if (/transaction failed on[\s-](ledger|chain)/i.test(safeRaw)) {
+        return {
+            title: "Transaction Failed On-Chain",
+            message: "The transaction was included in a ledger but did not succeed.",
+            suggestion: "Review the developer log for the failure reason, then retry with fresh simulation data.",
+            raw: safeRaw,
+        };
+    }
+
     if (/timeout|network|fetch/i.test(safeRaw)) {
         return {
             title: "Network Error",

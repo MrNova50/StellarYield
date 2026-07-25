@@ -60,6 +60,7 @@ describe('LiquidationWorker', () => {
       expect.any(String), // contract ID from config
       'liquidate',
       expect.arrayContaining([expect.anything(), expect.anything()]),
+      expect.objectContaining({ workerName: 'LiquidationWorker', jobId: '1' }),
     );
     expect(result).toEqual({ txHash: 'TX_HASH_ABC123' });
   });

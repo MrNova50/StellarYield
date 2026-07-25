@@ -1,11 +1,40 @@
-use crate::{DataKey, VaultError, YieldVault};
-use soroban_sdk::{symbol_short, Address, Env};
+use crate::{events, DataKey, VaultError, YieldVault};
+use soroban_sdk::{symbol_short, xdr::ToXdr, Address, Bytes, Env};
 
 impl YieldVault {
     /// Note: `emergency_pause` and `emergency_unpause` have moved to emergency.rs.
     /// They now support guardian authority, bounded durations, automatic expiry,
     /// and governance oversight. Use `YieldVault::emergency_pause(env, caller, duration)`
     /// and `YieldVault::emergency_unpause(env, caller)` instead.
+    /// Immediately pause all vault operations (deposit, withdraw, rebalance).
+    /// Callable only by admin.
+    pub fn emergency_pause(env: Env, admin: Address) -> Result<(), VaultError> {
+        Self::require_admin(&env, &admin)?;
+        env.storage().instance().set(&DataKey::Paused, &true);
+        // Use versioned event emission (#904)
+        events::emit_versioned_event(
+            &env,
+            symbol_short!("pause"),
+            events::ADMIN_ACTION_EVENT_V1.schema_version,
+            (admin,),
+        );
+        Ok(())
+    }
+
+    /// Resume vault operations after an emergency pause.
+    /// Callable only by admin.
+    pub fn emergency_unpause(env: Env, admin: Address) -> Result<(), VaultError> {
+        Self::require_admin(&env, &admin)?;
+        env.storage().instance().remove(&DataKey::Paused);
+        // Use versioned event emission (#904)
+        events::emit_versioned_event(
+            &env,
+            symbol_short!("unpause"),
+            events::ADMIN_ACTION_EVENT_V1.schema_version,
+            (admin,),
+        );
+        Ok(())
+    }
 
     /// Rescue tokens sent to the contract by mistake.
     ///
@@ -127,6 +156,112 @@ impl YieldVault {
                 }
             }
             _ => false,
+        }
+    }
+}
+
+    // ── Replay Protection for Admin Operations (#902) ───────────────────
+    /// Verify and consume an admin operation intent with domain separation.
+    ///
+    /// Domain includes:
+    /// - Network passphrase (prevents cross-network replay)
+    /// - Contract address (prevents cross-contract replay)
+    /// - Operation type (pause, unpause, set_admin, etc.)
+    /// - Nonce (prevents replay of same operation)
+    /// - Expiry timestamp (operations expire after 1 hour)
+    ///
+    /// # Arguments
+    /// * `operation_type` - Symbolic operation identifier (e.g., "pause", "admin")
+    /// * `nonce` - Unique nonce for this operation
+    /// * `expiry_timestamp` - Unix timestamp when this operation expires
+    ///
+    /// # Returns
+    /// Ok if the operation is valid and hasn't been executed before.
+    /// Err if expired or already executed.
+    pub fn verify_admin_operation(
+        env: &Env,
+        operation_type: soroban_sdk::Symbol,
+        nonce: u64,
+        expiry_timestamp: u64,
+    ) -> Result<(), VaultError> {
+        let now = env.ledger().timestamp();
+
+        // Check expiry
+        if now > expiry_timestamp {
+            return Err(VaultError::OperationExpired);
+        }
+
+        // Build domain-separated hash
+        // Domain = network || contract || operation || nonce || expiry
+        let network = env.ledger().network_id();
+        let contract = env.current_contract_address();
+
+        let preimage = (network, contract, operation_type, nonce, expiry_timestamp).to_xdr(env);
+        let op_hash: Bytes = env.crypto().sha256(&preimage).into();
+
+        // Check if already executed
+        if env.storage().instance().has(&DataKey::ExecutedAdminOp(op_hash.clone())) {
+            return Err(VaultError::OperationReplayed);
+        }
+
+        // Mark as executed
+        env.storage()
+            .instance()
+            .set(&DataKey::ExecutedAdminOp(op_hash), &true);
+
+        Ok(())
+    }
+
+    // ── Cross-Contract Allowlist with Network Binding (#905) ──────────────
+    /// Register an allowed contract for a given role on this network.
+    ///
+    /// Only the admin can call this. Once registered, only that contract
+    /// (on this network) can call functions that check this role.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the vault admin
+    /// * `role` - Symbolic role identifier (e.g., "zap", "keeper", "oracle")
+    /// * `contract` - The contract address to allowlist for this role
+    pub fn set_allowed_contract(
+        env: Env,
+        admin: Address,
+        role: soroban_sdk::Symbol,
+        contract: Address,
+    ) -> Result<(), VaultError> {
+        Self::require_admin(&env, &admin)?;
+
+        // Store the allowed contract for this role
+        // Network binding is implicit: contracts are tied to their deployment network
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedContractRole(role.clone()), &contract);
+
+        env.events().publish(
+            (symbol_short!("allow"),),
+            (admin, role, contract),
+        );
+        Ok(())
+    }
+
+    /// Verify that a calling contract is allowed for the given role.
+    ///
+    /// # Arguments
+    /// * `role` - The role to verify (e.g., "zap", "keeper")
+    /// * `caller` - The address attempting to call
+    ///
+    /// # Returns
+    /// Ok if caller is the allowed contract for this role.
+    /// Err if caller is unknown or wrong for this role.
+    pub fn require_allowed_contract(
+        env: &Env,
+        role: soroban_sdk::Symbol,
+        caller: &Address,
+    ) -> Result<(), VaultError> {
+        let allowed: Option<Address> = env.storage().instance().get(&DataKey::AllowedContractRole(role));
+
+        match allowed {
+            Some(allowed_contract) if &allowed_contract == caller => Ok(()),
+            _ => Err(VaultError::UnauthorizedContract),
         }
     }
 }

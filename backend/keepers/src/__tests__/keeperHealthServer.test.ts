@@ -115,4 +115,44 @@ describe('startKeeperHealthServer', () => {
     const { status } = await httpGet(port, '/unknown');
     expect(status).toBe(404);
   });
+
+  describe('GET /audit/export', () => {
+    it('returns 400 when the "stream" query parameter is missing', async () => {
+      server = startKeeperHealthServer([], 0);
+      const port = await startAndGetPort(server);
+
+      const { status, body } = await httpGet(port, '/audit/export');
+
+      expect(status).toBe(400);
+      expect((body as any).error).toBeDefined();
+    });
+
+    it('returns 200 with the bounded records from the injected audit log', async () => {
+      const exportStream = jest.fn().mockReturnValue([{ id: 'r1', seq: 0 }]);
+
+      server = startKeeperHealthServer([], 0, { exportStream });
+      const port = await startAndGetPort(server);
+
+      const { status, body } = await httpGet(port, '/audit/export?stream=compound&from=2026-01-01&to=2026-02-01');
+
+      expect(status).toBe(200);
+      expect(exportStream).toHaveBeenCalledWith('compound', '2026-01-01', '2026-02-01');
+      expect((body as any).count).toBe(1);
+      expect((body as any).records).toEqual([{ id: 'r1', seq: 0 }]);
+    });
+
+    it('returns 500 when the audit log throws', async () => {
+      const exportStream = jest.fn().mockImplementation(() => {
+        throw new Error('disk error');
+      });
+
+      server = startKeeperHealthServer([], 0, { exportStream });
+      const port = await startAndGetPort(server);
+
+      const { status, body } = await httpGet(port, '/audit/export?stream=compound');
+
+      expect(status).toBe(500);
+      expect((body as any).error).toBeDefined();
+    });
+  });
 });

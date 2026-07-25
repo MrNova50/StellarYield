@@ -8,6 +8,7 @@ import { LiquidationWorker } from './workers/LiquidationWorker';
 import { CompoundWorker } from './workers/CompoundWorker';
 import { KeeperSigner } from './signer/KeeperSigner';
 import { startKeeperHealthServer } from './api/queueHealth';
+import { keeperAuditLog } from './audit/KeeperAuditLog';
 
 /**
  * StellarYield Keeper Bot — main entry point.
@@ -40,7 +41,7 @@ async function main(): Promise<void> {
   const healthServer = startKeeperHealthServer([liquidationQueue, compoundQueue]);
 
   // 4. Start workers
-  const signer = new KeeperSigner();
+  const signer = new KeeperSigner(undefined, { auditLog: keeperAuditLog });
   logger.info({ publicKey: signer.publicKey }, 'Keeper bot public key');
 
   const liquidationWorker = new LiquidationWorker(signer);

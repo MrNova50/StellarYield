@@ -26,6 +26,10 @@ export interface ZapQuoteResponse {
   minAmountOutStroops: string;
   quoteAgeMs: number;
   isFallback: boolean;
+  issuedAt: string;
+  expiresAt: string;
+  routeHash: string;
+  assetConfigVersion: number;
 }
 
 /** Asset the user can select as zap input (Soroban SAC contract id). */

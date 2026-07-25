@@ -63,6 +63,7 @@ export class CompoundWorker {
       vaultContractId,
       'harvest',
       [keeperScVal, minAmtXdr],
+      { workerName: 'CompoundWorker', jobId: job.id, policyVersion: 'v1' },
     );
 
     logger.info(

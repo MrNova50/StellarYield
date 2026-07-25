@@ -1,14 +1,10 @@
-import { rpc, TransactionBuilder, Networks } from "@stellar/stellar-sdk";
+import { rpc, TransactionBuilder, Operation, Account } from "@stellar/stellar-sdk";
 import type { SignerAdapter } from "./signers";
 import {
-  WrongNetworkError,
   SpecMismatchError,
-  StaleSimulationError,
   SubmissionTimeoutError,
-  ContractExecutionError,
   InvalidXdrError,
   parseContractError,
-  decodeVaultError,
 } from "./errors";
 import { YIELD_VAULT_SPEC_HASH } from "./generated/yield_vault";
 
@@ -158,6 +154,7 @@ export class SignedTransaction<T = unknown> {
       response.hash,
       {
         rpcUrl,
+        rpcServer: typeof serverOrUrl !== "string" && !("rpcUrl" in serverOrUrl) ? server : undefined,
         networkPassphrase: this.meta.networkPassphrase,
         preparedMeta: this.meta,
       }
@@ -169,6 +166,8 @@ export interface SubmittedOpts<T> {
   rpcUrl: string;
   networkPassphrase: string;
   preparedMeta?: PreparedTransactionMeta<T>;
+  /** Optional pre-constructed/injectable RPC client, e.g. a test double. Falls back to `new rpc.Server(rpcUrl)` when omitted. */
+  rpcServer?: rpc.Server;
 }
 
 export class SubmittedTransaction<T = unknown> {
@@ -198,7 +197,7 @@ export class SubmittedTransaction<T = unknown> {
     const pollInterval = options?.pollIntervalMs ?? 1000;
     const timeout = options?.timeoutMs ?? 30000;
     const startTime = Date.now();
-    const server = new rpc.Server(this.opts.rpcUrl);
+    const server = this.opts.rpcServer ?? new rpc.Server(this.opts.rpcUrl);
 
     while (Date.now() - startTime < timeout) {
       if (options?.signal?.aborted) {
@@ -208,7 +207,7 @@ export class SubmittedTransaction<T = unknown> {
       const txStatus = await server.getTransaction(this.hash);
 
       if (txStatus.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        let resultValue = this.opts.preparedMeta?.simulationResult as T;
+        const resultValue = this.opts.preparedMeta?.simulationResult as T;
         const resultXdr = txStatus.resultXdr?.toXDR("base64");
 
         return new ConfirmedTransaction<T>(
@@ -223,19 +222,78 @@ export class SubmittedTransaction<T = unknown> {
         const resultXdr = txStatus.resultXdr?.toXDR("base64");
         throw parseContractError(
           new Error(`Transaction failed on ledger ${txStatus.ledger}`),
-          resultXdr
+          resultXdr,
+          undefined,
+          "poll"
         );
       }
 
-      if (txStatus.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
-        // Still pending inclusion
-      }
-
+      // NOT_FOUND (or any other transient status): still pending inclusion, keep polling.
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
 
     throw new SubmissionTimeoutError(this.hash, timeout);
   }
+}
+
+/**
+ * True when a simulation response indicates expired ledger entries in the
+ * transaction's footprint must be restored before the operation can succeed.
+ */
+export function needsRestore(
+  simulation: rpc.Api.SimulateTransactionResponse | undefined
+): simulation is rpc.Api.SimulateTransactionRestoreResponse {
+  return !!simulation && rpc.Api.isSimulationRestore(simulation);
+}
+
+/**
+ * Given a restore preamble from a `SimulateTransactionRestoreResponse`
+ * (surfaced to callers via `RestoreRequiredError.restorePreamble`), builds,
+ * signs, submits, and awaits a `RestoreFootprintOp` transaction that brings
+ * the expired ledger entries back into scope. On success, the caller should
+ * simply retry its original prepare call (`vaultClient.deposit.prepare(...)`,
+ * etc.) — the entries will simulate successfully now.
+ */
+export async function restoreAndRetry(params: {
+  restorePreamble: { minResourceFee: string; transactionData: { build(): unknown } };
+  sourceAccount: Account;
+  networkPassphrase: string;
+  signer: SignerAdapter;
+  server: rpc.Server;
+  contractId?: string;
+}): Promise<ConfirmedTransaction<void>> {
+  const { restorePreamble, sourceAccount, networkPassphrase, signer, server, contractId } = params;
+
+  const restoreTx = new TransactionBuilder(sourceAccount, {
+    fee: restorePreamble.minResourceFee,
+    networkPassphrase,
+  })
+    .addOperation(Operation.restoreFootprint({}))
+    .setSorobanData(restorePreamble.transactionData.build() as any)
+    .setTimeout(30)
+    .build();
+
+  const signedXdr = await signer.signTransaction(restoreTx.toXDR(), {
+    networkPassphrase,
+    contractId,
+  });
+
+  const signed = new SignedTransaction<void>(signedXdr, {
+    simulationResult: undefined as unknown as void,
+    footprint: "",
+    authEntries: [],
+    minResourceFee: restorePreamble.minResourceFee,
+    transactionData: "",
+    latestLedger: 0,
+    validUntilLedger: 0,
+    contractId: contractId ?? "",
+    networkPassphrase,
+    method: "restore_footprint",
+    argsHash: "",
+  });
+
+  const submitted = await signed.submit(server);
+  return submitted.wait();
 }
 
 export class ConfirmedTransaction<T = unknown> {

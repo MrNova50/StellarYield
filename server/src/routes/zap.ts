@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { getZapSupportedAssetsPayload } from "../config/zapAssetsConfig";
-import { getZapQuote, type ZapQuoteBody } from "../services/zapQuote";
+import { getZapQuote, verifyZapQuote, type ZapQuoteBody } from "../services/zapQuote";
 import { sendError } from "../utils/errorResponse";
 import { validateZapQuote } from "../middleware/validation";
 
@@ -44,6 +44,10 @@ router.post("/quote", validateZapQuote, async (req: Request, res: Response) => {
       minAmountOutStroops: quote.minAmountOutStroops,
       quoteAgeMs: quote.quoteAgeMs,
       isFallback: quote.isFallback,
+      issuedAt: quote.issuedAt,
+      expiresAt: quote.expiresAt,
+      routeHash: quote.routeHash,
+      assetConfigVersion: quote.assetConfigVersion,
     });
   } catch (e) {
     sendError(
@@ -51,6 +55,29 @@ router.post("/quote", validateZapQuote, async (req: Request, res: Response) => {
       500,
       "QUOTE_FAILED",
       "Quote failed",
+      e instanceof Error ? e.message : undefined
+    );
+  }
+});
+
+router.post("/verify", (req: Request, res: Response) => {
+  try {
+    const result = verifyZapQuote(req.body);
+    if (!result.valid) {
+      return sendError(
+        res,
+        400,
+        result.errorCode || "INVALID_QUOTE",
+        result.reason || "Invalid quote",
+      );
+    }
+    res.json({ success: true });
+  } catch (e) {
+    sendError(
+      res,
+      500,
+      "VERIFY_FAILED",
+      "Failed to verify quote",
       e instanceof Error ? e.message : undefined
     );
   }
