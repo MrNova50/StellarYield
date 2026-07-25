@@ -218,3 +218,286 @@ export function listScenarios(): TreasuryScenario[] {
 export function deleteScenario(id: string): boolean {
   return scenarioStore.delete(id);
 }
+
+// ── Cashflow Import ──────────────────────────────────────────────
+
+export const SUPPORTED_ASSETS = ["XLM", "USDC", "ETH", "BTC"] as const;
+export type SupportedAsset = (typeof SUPPORTED_ASSETS)[number];
+
+export const CASHFLOW_CATEGORIES = [
+  "interest",
+  "deposit",
+  "withdrawal",
+  "fee",
+  "transfer",
+  "other",
+] as const;
+export type CashflowCategory = (typeof CASHFLOW_CATEGORIES)[number];
+
+export interface CashflowRow {
+  id: string;
+  date: string;
+  asset: string;
+  amount: number;
+  direction: "inflow" | "outflow";
+  category: string;
+  memo?: string;
+}
+
+export interface CashflowRowError {
+  rowIndex: number;
+  field: string;
+  code: string;
+  message: string;
+}
+
+export interface CashflowRowWarning {
+  rowIndex: number;
+  field: string;
+  code: string;
+  message: string;
+}
+
+export interface CashflowImportPreview {
+  validRows: CashflowRow[];
+  errors: CashflowRowError[];
+  warnings: CashflowRowWarning[];
+  summary: {
+    totalRows: number;
+    validCount: number;
+    errorCount: number;
+    warningCount: number;
+    totalInflow: number;
+    totalOutflow: number;
+    netFlow: number;
+  };
+}
+
+type RowValidationResult = {
+  row: CashflowRow | null;
+  errors: CashflowRowError[];
+  warnings: CashflowRowWarning[];
+};
+
+function parseDateSafe(raw: string): Date | null {
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+function validateSingleCashflowRow(
+  raw: unknown,
+  rowIndex: number,
+  knownIds: Set<string>,
+): RowValidationResult {
+  const errors: CashflowRowError[] = [];
+  const warnings: CashflowRowWarning[] = [];
+
+  if (!raw || typeof raw !== "object") {
+    errors.push({
+      rowIndex,
+      field: "_root",
+      code: "not_an_object",
+      message: `Row ${rowIndex} must be an object.`,
+    });
+    return { row: null, errors, warnings };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const row: Partial<CashflowRow> = {};
+
+  // id
+  if (typeof obj.id !== "string" || obj.id.trim().length === 0) {
+    errors.push({
+      rowIndex,
+      field: "id",
+      code: "missing_id",
+      message: `Row ${rowIndex}: "id" is required and must be a non-empty string.`,
+    });
+  } else if (knownIds.has(obj.id.trim())) {
+    errors.push({
+      rowIndex,
+      field: "id",
+      code: "duplicate_id",
+      message: `Row ${rowIndex}: duplicate id "${obj.id}".`,
+    });
+  } else {
+    row.id = obj.id.trim();
+    knownIds.add(row.id);
+  }
+
+  // date
+  if (typeof obj.date !== "string" || obj.date.trim().length === 0) {
+    errors.push({
+      rowIndex,
+      field: "date",
+      code: "missing_date",
+      message: `Row ${rowIndex}: "date" is required and must be a string.`,
+    });
+  } else {
+    const parsed = parseDateSafe(obj.date);
+    if (!parsed) {
+      errors.push({
+        rowIndex,
+        field: "date",
+        code: "invalid_date",
+        message: `Row ${rowIndex}: "${obj.date}" is not a valid date.`,
+      });
+    } else if (parsed > new Date()) {
+      warnings.push({
+        rowIndex,
+        field: "date",
+        code: "future_date",
+        message: `Row ${rowIndex}: date "${obj.date}" is in the future.`,
+      });
+      row.date = obj.date;
+    } else {
+      row.date = obj.date;
+    }
+  }
+
+  // asset
+  if (typeof obj.asset !== "string" || obj.asset.trim().length === 0) {
+    errors.push({
+      rowIndex,
+      field: "asset",
+      code: "missing_asset",
+      message: `Row ${rowIndex}: "asset" is required.`,
+    });
+  } else {
+    const asset = obj.asset.trim().toUpperCase();
+    if (!(SUPPORTED_ASSETS as readonly string[]).includes(asset)) {
+      errors.push({
+        rowIndex,
+        field: "asset",
+        code: "unsupported_asset",
+        message: `Row ${rowIndex}: "${obj.asset}" is not supported. Supported: ${SUPPORTED_ASSETS.join(", ")}.`,
+      });
+    } else {
+      row.asset = asset;
+    }
+  }
+
+  // amount
+  if (obj.amount === undefined || obj.amount === null) {
+    errors.push({
+      rowIndex,
+      field: "amount",
+      code: "missing_amount",
+      message: `Row ${rowIndex}: "amount" is required.`,
+    });
+  } else if (typeof obj.amount !== "number" || !Number.isFinite(obj.amount)) {
+    errors.push({
+      rowIndex,
+      field: "amount",
+      code: "invalid_amount",
+      message: `Row ${rowIndex}: "amount" must be a finite number.`,
+    });
+  } else if ((obj.amount as number) <= 0) {
+    errors.push({
+      rowIndex,
+      field: "amount",
+      code: "negative_amount",
+      message: `Row ${rowIndex}: "amount" must be greater than 0.`,
+    });
+  } else {
+    row.amount = obj.amount as number;
+  }
+
+  // direction
+  if (typeof obj.direction !== "string") {
+    errors.push({
+      rowIndex,
+      field: "direction",
+      code: "missing_direction",
+      message: `Row ${rowIndex}: "direction" is required.`,
+    });
+  } else {
+    const dir = obj.direction.toLowerCase();
+    if (dir !== "inflow" && dir !== "outflow") {
+      errors.push({
+        rowIndex,
+        field: "direction",
+        code: "invalid_direction",
+        message: `Row ${rowIndex}: "direction" must be "inflow" or "outflow".`,
+      });
+    } else {
+      row.direction = dir;
+    }
+  }
+
+  // category
+  if (typeof obj.category !== "string" || obj.category.trim().length === 0) {
+    errors.push({
+      rowIndex,
+      field: "category",
+      code: "missing_category",
+      message: `Row ${rowIndex}: "category" is required.`,
+    });
+  } else {
+    const cat = obj.category.toLowerCase();
+    if (!(CASHFLOW_CATEGORIES as readonly string[]).includes(cat)) {
+      errors.push({
+        rowIndex,
+        field: "category",
+        code: "invalid_category",
+        message: `Row ${rowIndex}: "${obj.category}" is not a valid category. Valid: ${CASHFLOW_CATEGORIES.join(", ")}.`,
+      });
+    } else {
+      row.category = cat;
+    }
+  }
+
+  // memo (optional)
+  if (obj.memo !== undefined && obj.memo !== null) {
+    row.memo = String(obj.memo);
+  }
+
+  const hasErrors = errors.length > 0;
+  return {
+    row: hasErrors ? null : (row as CashflowRow),
+    errors,
+    warnings,
+  };
+}
+
+function computeSummary(
+  validRows: CashflowRow[],
+): CashflowImportPreview["summary"] {
+  let totalInflow = 0;
+  let totalOutflow = 0;
+  for (const r of validRows) {
+    if (r.direction === "inflow") totalInflow += r.amount;
+    else totalOutflow += r.amount;
+  }
+  return {
+    totalRows: 0, // filled by caller
+    validCount: validRows.length,
+    errorCount: 0, // filled by caller
+    warningCount: 0, // filled by caller
+    totalInflow,
+    totalOutflow,
+    netFlow: totalInflow - totalOutflow,
+  };
+}
+
+export function previewImport(rows: unknown[]): CashflowImportPreview {
+  const knownIds = new Set<string>();
+  let allErrors: CashflowRowError[] = [];
+  let allWarnings: CashflowRowWarning[] = [];
+  const validRows: CashflowRow[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const result = validateSingleCashflowRow(rows[i], i, knownIds);
+    allErrors.push(...result.errors);
+    allWarnings.push(...result.warnings);
+    if (result.row) validRows.push(result.row);
+  }
+
+  const summary = computeSummary(validRows);
+  summary.totalRows = rows.length;
+  summary.errorCount = allErrors.length;
+  summary.warningCount = allWarnings.length;
+
+  return { validRows, errors: allErrors, warnings: allWarnings, summary };
+}
