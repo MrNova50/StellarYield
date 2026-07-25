@@ -1,5 +1,11 @@
 import { VaultError } from "./generated/yield_vault";
 
+/**
+ * Lifecycle phase in which an SDK error originated. Lets callers branch on
+ * "where did this fail" instead of parsing error messages/class names alone.
+ */
+export type SdkErrorPhase = "simulate" | "sign" | "submit" | "poll" | "restore";
+
 export const VAULT_ERROR_MESSAGES: Record<number, string> = {
   1: "Contract not initialized",
   2: "Contract already initialized",
@@ -17,9 +23,16 @@ export const VAULT_ERROR_MESSAGES: Record<number, string> = {
 };
 
 export abstract class SorobanSdkError extends Error {
-  constructor(message: string) {
+  /** Lifecycle phase in which this error was raised, when known. */
+  public readonly phase?: SdkErrorPhase;
+  /** Whether retrying the operation that produced this error may succeed. */
+  public readonly retryable: boolean;
+
+  constructor(message: string, phase?: SdkErrorPhase, retryable = false) {
     super(message);
     this.name = this.constructor.name;
+    this.phase = phase;
+    this.retryable = retryable;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -35,9 +48,10 @@ export class ContractExecutionError extends SorobanSdkError {
     errorName: string,
     message: string,
     rawResultXdr?: string,
-    diagnosticEvents?: string[]
+    diagnosticEvents?: string[],
+    phase: SdkErrorPhase = "submit"
   ) {
-    super(`Contract Execution Error [${errorCode} ${errorName}]: ${message}`);
+    super(`Contract Execution Error [${errorCode} ${errorName}]: ${message}`, phase, false);
     this.errorCode = errorCode;
     this.errorName = errorName;
     this.rawResultXdr = rawResultXdr;
@@ -51,7 +65,9 @@ export class WrongNetworkError extends SorobanSdkError {
 
   constructor(expectedNetwork: string, actualNetwork: string) {
     super(
-      `Network passphrase mismatch: expected '${expectedNetwork}', received '${actualNetwork}'`
+      `Network passphrase mismatch: expected '${expectedNetwork}', received '${actualNetwork}'`,
+      "sign",
+      false
     );
     this.expectedNetwork = expectedNetwork;
     this.actualNetwork = actualNetwork;
@@ -64,7 +80,9 @@ export class SpecMismatchError extends SorobanSdkError {
 
   constructor(expectedHash: string, actualHash: string) {
     super(
-      `Contract spec hash mismatch: expected '${expectedHash}', got '${actualHash}'`
+      `Contract spec hash mismatch: expected '${expectedHash}', got '${actualHash}'`,
+      "simulate",
+      false
     );
     this.expectedHash = expectedHash;
     this.actualHash = actualHash;
@@ -77,7 +95,9 @@ export class StaleSimulationError extends SorobanSdkError {
 
   constructor(currentLedger: number, validUntilLedger: number) {
     super(
-      `Simulation snapshot is stale (valid until ledger ${validUntilLedger}, current ledger ${currentLedger})`
+      `Simulation snapshot is stale (valid until ledger ${validUntilLedger}, current ledger ${currentLedger})`,
+      "simulate",
+      true
     );
     this.currentLedger = currentLedger;
     this.validUntilLedger = validUntilLedger;
@@ -90,7 +110,9 @@ export class SubmissionTimeoutError extends SorobanSdkError {
 
   constructor(txHash: string, timeoutMs: number) {
     super(
-      `Transaction '${txHash}' pending inclusion timed out after ${timeoutMs}ms. Transaction may still land on-chain; use recoverTransaction() to check.`
+      `Transaction '${txHash}' pending inclusion timed out after ${timeoutMs}ms. Transaction may still land on-chain; use recoverTransaction() to check.`,
+      "poll",
+      true
     );
     this.txHash = txHash;
     this.timeoutMs = timeoutMs;
@@ -99,7 +121,11 @@ export class SubmissionTimeoutError extends SorobanSdkError {
 
 export class WalletRejectedError extends SorobanSdkError {
   constructor(reason?: string) {
-    super(reason ? `Wallet rejected signature: ${reason}` : "Wallet rejected signature");
+    super(
+      reason ? `Wallet rejected signature: ${reason}` : "Wallet rejected signature",
+      "sign",
+      true
+    );
   }
 }
 
@@ -107,7 +133,7 @@ export class InvalidXdrError extends SorobanSdkError {
   public readonly rawXdr: string;
 
   constructor(rawXdr: string, details?: string) {
-    super(`Failed to parse or validate XDR string: ${details || "Invalid XDR"}`);
+    super(`Failed to parse or validate XDR string: ${details || "Invalid XDR"}`, "sign", false);
     this.rawXdr = rawXdr;
   }
 }
@@ -117,10 +143,63 @@ export class MissingAuthError extends SorobanSdkError {
 
   constructor(requiredAddress: string) {
     super(
-      `Transaction simulation requires authorization entry for '${requiredAddress}'`
+      `Transaction simulation requires authorization entry for '${requiredAddress}'`,
+      "simulate",
+      false
     );
     this.requiredAddress = requiredAddress;
   }
+}
+
+/**
+ * Restore preamble data returned by a `SimulateTransactionRestoreResponse`.
+ * `transactionData` is a `SorobanDataBuilder` instance from `@stellar/stellar-sdk`
+ * (kept as `unknown` here so `errors.ts` has no dependency on that package's types).
+ */
+export interface RestorePreambleInfo {
+  minResourceFee: string;
+  transactionData: unknown;
+}
+
+export class RestoreRequiredError extends SorobanSdkError {
+  public readonly minResourceFee: string;
+  public readonly restorePreamble?: RestorePreambleInfo;
+
+  constructor(minResourceFee: string, restorePreamble?: RestorePreambleInfo) {
+    super(
+      `Simulation indicates expired ledger entries requiring a restore footprint operation (min resource fee ${minResourceFee})`,
+      "restore",
+      true
+    );
+    this.minResourceFee = minResourceFee;
+    this.restorePreamble = restorePreamble;
+  }
+}
+
+/**
+ * Normalized finality classification for a submitted transaction's poll
+ * result, so callers can branch on a small stable set of outcomes instead of
+ * raw RPC status strings.
+ */
+export interface FinalityResult {
+  status: "success" | "failed" | "timeout" | "unknown";
+  retryable: boolean;
+}
+
+export function classifyFinality(
+  rpcStatus: string | undefined,
+  timedOut: boolean
+): FinalityResult {
+  if (rpcStatus === "SUCCESS") {
+    return { status: "success", retryable: false };
+  }
+  if (rpcStatus === "FAILED") {
+    return { status: "failed", retryable: false };
+  }
+  if (rpcStatus === "NOT_FOUND" && timedOut) {
+    return { status: "timeout", retryable: true };
+  }
+  return { status: "unknown", retryable: true };
 }
 
 export function decodeVaultError(code: number): { name: string; message: string } {
@@ -133,7 +212,8 @@ export function decodeVaultError(code: number): { name: string; message: string 
 export function parseContractError(
   error: unknown,
   rawResultXdr?: string,
-  diagnosticEvents?: string[]
+  diagnosticEvents?: string[],
+  phase: SdkErrorPhase = "submit"
 ): SorobanSdkError {
   if (error instanceof SorobanSdkError) {
     return error;
@@ -145,7 +225,7 @@ export function parseContractError(
   if (codeMatch) {
     const codeNum = parseInt(codeMatch[1] || codeMatch[2] || codeMatch[3], 10);
     const { name, message } = decodeVaultError(codeNum);
-    return new ContractExecutionError(codeNum, name, message, rawResultXdr, diagnosticEvents);
+    return new ContractExecutionError(codeNum, name, message, rawResultXdr, diagnosticEvents, phase);
   }
 
   return new ContractExecutionError(
@@ -153,6 +233,7 @@ export function parseContractError(
     "GenericSorobanError",
     errString || "Unknown Soroban contract execution failure",
     rawResultXdr,
-    diagnosticEvents
+    diagnosticEvents,
+    phase
   );
 }

@@ -12,8 +12,10 @@ npm install @stellaryield/sdk
 
 ### Vault Operations
 
+Every state-changing call (`deposit`, `withdraw`, `harvest`, `rebalance`, `emergencyWithdraw`) returns a `PreparedTransaction`, not a resolved value — drive it through the transaction lifecycle yourself (`simulate` happens during `prepare()`, then `sign` -> `submit` -> `poll`/`wait`):
+
 ```typescript
-import { VaultClient } from '@stellaryield/sdk';
+import { VaultClient, ServerKeypairSigner } from '@stellaryield/sdk';
 
 const vault = new VaultClient({
   contractId: 'CACT...',
@@ -21,22 +23,30 @@ const vault = new VaultClient({
   rpcUrl: 'https://soroban-testnet.stellar.org',
 });
 
+const signer = ServerKeypairSigner.fromSecret('S...');
+const from = await signer.getPublicKey();
+
 // Deposit tokens into the vault
-const shares = await vault.deposit({
-  from: 'GB...',
-  amount: '1000000000',
-  minSharesOut: '990000000', // 1% slippage tolerance
+const prepared = await vault.deposit.prepare({
+  from,
+  amount: 1_000_000_000n,
+  min_shares_out: 990_000_000n, // 1% slippage tolerance
 });
+const signed = await prepared.sign(signer);
+const submitted = await signed.submit(vault.rpcUrl);
+const confirmed = await submitted.wait();
+console.log(`Minted ${confirmed.result} shares in ledger ${confirmed.ledger}`);
 
 // Check your balance
-const myShares = await vault.getShares('GB...');
+const myShares = await vault.getShares(from);
 
 // Withdraw by burning shares
-const amount = await vault.withdraw({
-  to: 'GB...',
-  shares: '500000000',
-});
+const withdrawal = await (await vault.withdraw.prepare({ to: from, shares: myShares }))
+  .sign(signer);
+const withdrawn = await (await withdrawal.submit(vault.rpcUrl)).wait();
 ```
+
+If a simulation reports expired ledger entries, it throws `RestoreRequiredError` (`error.restorePreamble`) — pass that into the exported `restoreAndRetry()` helper, then retry `prepare()`. See `src/examples/basic.ts` for a full worked example including the restore path.
 
 ### API Client
 
@@ -60,12 +70,13 @@ const vaultData = await api.getVaultData('vault-contract-id');
 ## Features
 
 - **VaultClient**: Interact with YieldVault Soroban contract
-  - `deposit()`: Deposit tokens and receive shares
-  - `withdraw()`: Burn shares to receive tokens
+  - `deposit.prepare()`, `withdraw.prepare()`, `harvest.prepare()`, `rebalance.prepare()`, `emergencyWithdraw.prepare()`: build+simulate a `PreparedTransaction`
   - `getShares()`: Check user share balance
   - `totalShares()`, `totalAssets()`: Vault metrics
-  - `convertToShares()`, `convertToAssets()`: Price conversions
-  - `previewDeposit()`: Preview deposit outcome
+  - `getAdmin()`, `getToken()`, `getFlashLoanFee()`: Read-only contract state
+  - `recoverTransaction(hash)`: Resume polling a previously submitted transaction
+
+- **Lifecycle helpers**: `PreparedTransaction` -> `.sign()` -> `SignedTransaction` -> `.submit()` -> `SubmittedTransaction` -> `.wait()` -> `ConfirmedTransaction`, plus `restoreAndRetry()`/`needsRestore()` for the Soroban footprint-restore path. Errors carry a `phase` (`simulate`/`sign`/`submit`/`poll`/`restore`) and `retryable` flag.
 
 - **ApiClient**: Fetch vault metrics from backend
   - `getCurrentAPY()`: Get current APY

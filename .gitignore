@@ -35,6 +35,7 @@ frontend-build.log
 
 # ── Runtime data ─────────────────────────────────────────────────────────────
 server/audit-logs/
+backend/keepers/audit-logs/
 
 # ── Local env overrides ───────────────────────────────────────────────────────
 .env.local

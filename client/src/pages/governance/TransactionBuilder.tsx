@@ -6,6 +6,12 @@ import type { AdminAction, PendingTransaction } from "./types";
 import { AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 import { validateTransactionBuilder } from "./validation";
 import { validateContractRegistryEntry } from "../../services/contractRegistry";
+import TxStatusTimeline from "../../components/transaction/TxStatusTimeline";
+import TransactionFailedModal from "../../components/transaction/TransactionFailedModal";
+import { decodeTransactionError } from "../../utils/errorDecoder";
+import type { TxPhase } from "../../services/transactionPhase";
+
+const BUILD_PHASE_STEPS: readonly TxPhase[] = ["building", "simulating"];
 
 interface TransactionBuilderProps {
   threshold: number;
@@ -43,6 +49,8 @@ export default function TransactionBuilder({
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<TxPhase>("idle");
+  const [showFailedModal, setShowFailedModal] = useState(false);
 
   const action = ADMIN_ACTIONS.find((a) => a.method === selectedAction);
 
@@ -56,6 +64,8 @@ export default function TransactionBuilder({
 
     setBuilding(true);
     setError(null);
+    setShowFailedModal(false);
+    setPhase("building");
 
     try {
       validateContractRegistryEntry("vault", contractId);
@@ -74,6 +84,7 @@ export default function TransactionBuilder({
         if (field.required && !value) {
           setError(`${field.label} is required`);
           setBuilding(false);
+          setPhase("idle");
           return;
         }
         if (field.type === "address") {
@@ -93,6 +104,7 @@ export default function TransactionBuilder({
         .setTimeout(86400) // 24h expiry for multi-sig collection
         .build();
 
+      setPhase("simulating");
       const simulated = await server.simulateTransaction(tx);
 
       if (StellarSdk.rpc.Api.isSimulationError(simulated)) {
@@ -121,11 +133,14 @@ export default function TransactionBuilder({
         status: "pending",
       };
 
+      setPhase("success");
       onTransactionCreated(pendingTx);
       setSelectedAction("");
       setFieldValues({});
     } catch (err) {
+      setPhase("failure");
       setError(err instanceof Error ? err.message : String(err));
+      setShowFailedModal(true);
     } finally {
       setBuilding(false);
     }
@@ -133,12 +148,27 @@ export default function TransactionBuilder({
 
   return (
     <div className="glass-card p-6">
+      {showFailedModal && error && (
+        <TransactionFailedModal
+          error={decodeTransactionError(error)}
+          onClose={() => setShowFailedModal(false)}
+          onRetry={() => {
+            setShowFailedModal(false);
+            void handleBuild();
+          }}
+          failurePhase="simulating"
+          walletConnected={Boolean(walletAddress)}
+        />
+      )}
+
       <h3 className="text-lg font-bold mb-4">Propose Admin Action</h3>
 
       <div className="space-y-4">
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Action</label>
+          <label htmlFor="admin-action-select" className="block text-sm text-gray-400 mb-1">Action</label>
           <select
+            id="admin-action-select"
+            aria-label="Action"
             value={selectedAction}
             onChange={(e) => {
               setSelectedAction(e.target.value as AdminAction);
@@ -180,9 +210,14 @@ export default function TransactionBuilder({
               </div>
             ))}
 
-            {error && (
-              <p className="text-sm text-red-400">{error}</p>
-            )}
+            <TxStatusTimeline
+              steps={BUILD_PHASE_STEPS}
+              phase={phase}
+              errorMessage={phase === "failure" ? error : null}
+              failedAtPhase={phase === "failure" ? "simulating" : null}
+              onRetry={phase === "failure" ? () => void handleBuild() : undefined}
+              className="mb-2"
+            />
 
             {validationSummary && (
               <div

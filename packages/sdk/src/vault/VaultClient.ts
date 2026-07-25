@@ -1,11 +1,14 @@
-import { rpc, Keypair } from "@stellar/stellar-sdk";
 import {
   Client as GeneratedVaultClient,
   YIELD_VAULT_SPEC_HASH,
-  VaultError,
 } from "../generated/yield_vault";
-import { PreparedTransaction, PreparedTransactionMeta, SubmittedTransaction } from "../lifecycle";
-import { SpecMismatchError, WrongNetworkError, parseContractError } from "../errors";
+import {
+  PreparedTransaction,
+  PreparedTransactionMeta,
+  SubmittedTransaction,
+  needsRestore,
+} from "../lifecycle";
+import { SpecMismatchError, parseContractError, RestoreRequiredError } from "../errors";
 import type { VaultConfig } from "../types";
 
 export interface PreparedMethod<TArgs, TResult> {
@@ -137,6 +140,14 @@ export class VaultClient {
       }
 
       const assembled = await fn.call(this.generatedClient, args);
+
+      if (needsRestore(assembled.simulation)) {
+        throw new RestoreRequiredError(
+          assembled.simulation.restorePreamble.minResourceFee,
+          assembled.simulation.restorePreamble
+        );
+      }
+
       const rawXdr = assembled.built ? assembled.built.toXDR() : assembled.simulation;
 
       const meta: PreparedTransactionMeta<TResult> = {
@@ -156,7 +167,7 @@ export class VaultClient {
 
       return new PreparedTransaction<TResult>(rawXdr, meta);
     } catch (error) {
-      throw parseContractError(error);
+      throw parseContractError(error, undefined, undefined, "simulate");
     }
   }
 

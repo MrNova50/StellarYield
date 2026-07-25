@@ -66,6 +66,7 @@ export class LiquidationWorker {
       config.contracts.stablecoinManager,
       'liquidate',
       [liquidatorScVal, userScVal],
+      { workerName: 'LiquidationWorker', jobId: job.id, policyVersion: 'v1' },
     );
 
     logger.info(

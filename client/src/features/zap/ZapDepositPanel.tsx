@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, Zap, Loader2, AlertTriangle, RefreshCw, Clock, Info, Ban } from "lucide-react";
 import TxStatusTimeline from "../../components/transaction/TxStatusTimeline";
+import TransactionFailedModal from "../../components/transaction/TransactionFailedModal";
+import { decodeTransactionError } from "../../utils/errorDecoder";
 import { zapDeposit } from "../../services/soroban";
 import type { TxPhase } from "../../services/transactionPhase";
 import { TX_PHASE_PIPELINE } from "../../services/transactionPhase";
@@ -86,6 +88,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const [lastProgressPhase, setLastProgressPhase] = useState<TxPhase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [showFailedModal, setShowFailedModal] = useState(false);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [expectedOut, setExpectedOut] = useState<bigint | null>(null);
   const [quotePath, setQuotePath] = useState<string>("");
@@ -231,6 +234,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     setTxHash(null);
     setStatus("loading");
     setError("");
+    setShowFailedModal(false);
     try {
       const result = await zapDeposit(
         walletAddress,
@@ -255,6 +259,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "Transaction failed");
+      setShowFailedModal(true);
     }
   }, [
     walletAddress,
@@ -515,6 +520,24 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
           <AlertTriangle className="w-4 h-4 shrink-0" />
           {error}
         </div>
+      )}
+
+      {showFailedModal && txPhase === "failure" && error && (
+        <TransactionFailedModal
+          error={decodeTransactionError(error)}
+          onClose={() => setShowFailedModal(false)}
+          onRetry={() => {
+            setShowFailedModal(false);
+            retryZap();
+          }}
+          failurePhase={
+            lastProgressPhase !== "idle" &&
+            lastProgressPhase !== "success" &&
+            lastProgressPhase !== "failure"
+              ? lastProgressPhase
+              : "polling"
+          }
+        />
       )}
 
       <TxStatusTimeline

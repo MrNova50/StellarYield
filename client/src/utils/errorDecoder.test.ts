@@ -143,6 +143,30 @@ describe("decodeTransactionError", () => {
         expect(result.title).toBe("Network Error");
     });
 
+    it("handles unknown finality after a poll timeout (partial submission)", () => {
+        const result = decodeTransactionError(
+            "Transaction 'abc123' pending inclusion timed out after 30000ms. Transaction may still land on-chain; use recoverTransaction() to check.",
+        );
+        expect(result.title).toBe("Submission Status Unknown");
+        expect(result.suggestion).toContain("explorer");
+    });
+
+    it("handles the submitAndPoll generic timeout message (partial submission)", () => {
+        const result = decodeTransactionError("Transaction timed out");
+        expect(result.title).toBe("Submission Status Unknown");
+    });
+
+    it("handles a finalization failure (FAILED status reached on-chain)", () => {
+        const result = decodeTransactionError("Transaction failed on ledger 918273");
+        expect(result.title).toBe("Transaction Failed On-Chain");
+        expect(result.suggestion).toBeTruthy();
+    });
+
+    it("handles a finalization failure with hyphenated on-chain wording", () => {
+        const result = decodeTransactionError("Contract Execution Error [999 GenericSorobanError]: Transaction failed on-chain");
+        expect(result.title).toBe("Transaction Failed On-Chain");
+    });
+
     it("returns generic fallback for unrecognised error", () => {
         const result = decodeTransactionError("some completely unknown problem");
         expect(result.title).toBe("Transaction Failed");
