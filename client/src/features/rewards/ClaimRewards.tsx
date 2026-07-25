@@ -3,6 +3,12 @@ import { useWallet } from "../../context/useWallet";
 import { Gift, CheckCircle, Loader2 } from "lucide-react";
 import { getApiBaseUrl } from "../../lib/api";
 import ApiErrorBanner from "../../components/ApiErrorBanner/ApiErrorBanner";
+import TxStatusTimeline from "../../components/transaction/TxStatusTimeline";
+import TransactionFailedModal from "../../components/transaction/TransactionFailedModal";
+import { decodeTransactionError } from "../../utils/errorDecoder";
+import type { TxPhase } from "../../services/transactionPhase";
+
+const CLAIM_PHASE_STEPS: readonly TxPhase[] = ["building", "submitting"];
 
 interface ClaimData {
   index: number;
@@ -31,6 +37,8 @@ export default function ClaimRewards() {
   const [claiming, setClaiming] = useState(false);
   const [claimed, setClaimed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [claimPhase, setClaimPhase] = useState<TxPhase>("idle");
+  const [showFailedModal, setShowFailedModal] = useState(false);
 
   const fetchClaimData = useCallback(async () => {
     if (!walletAddress) return;
@@ -70,8 +78,11 @@ export default function ClaimRewards() {
     if (!claimData || !walletAddress) return;
     setClaiming(true);
     setError(null);
+    setShowFailedModal(false);
+    setClaimPhase("building");
 
     try {
+      setClaimPhase("submitting");
       const res = await fetch(`${getApiBase()}/api/rewards/claim`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -90,11 +101,14 @@ export default function ClaimRewards() {
         );
       }
 
+      setClaimPhase("success");
       setClaimed(true);
     } catch (err) {
+      setClaimPhase("failure");
       setError(
         err instanceof Error ? err.message : "Claim transaction failed",
       );
+      setShowFailedModal(true);
     } finally {
       setClaiming(false);
     }
@@ -140,7 +154,20 @@ export default function ClaimRewards() {
         <h2 className="text-xl font-bold">Claim Your $YIELD Rewards</h2>
       </div>
 
-      {error && (
+      {showFailedModal && error && (
+        <TransactionFailedModal
+          error={decodeTransactionError(error)}
+          onClose={() => setShowFailedModal(false)}
+          onRetry={() => {
+            setShowFailedModal(false);
+            void handleClaim();
+          }}
+          failurePhase="submitting"
+          walletConnected={Boolean(walletAddress)}
+        />
+      )}
+
+      {error && claimPhase === "idle" && (
         <ApiErrorBanner message={error} onRetry={fetchClaimData} className="mb-6" />
       )}
 
@@ -185,6 +212,14 @@ export default function ClaimRewards() {
               </>
             )}
           </button>
+
+          <TxStatusTimeline
+            steps={CLAIM_PHASE_STEPS}
+            phase={claimPhase}
+            errorMessage={claimPhase === "failure" ? error : null}
+            failedAtPhase={claimPhase === "failure" ? "submitting" : null}
+            onRetry={claimPhase === "failure" ? () => void handleClaim() : undefined}
+          />
         </div>
       )}
     </div>

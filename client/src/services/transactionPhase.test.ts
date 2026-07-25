@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   TX_PHASE_PIPELINE,
   TX_PHASE_SUBMIT_POLL,
+  TX_PHASE_RECOVERY,
+  TX_PHASE_LABELS,
   stepIndexIn,
   isStepCompleted,
   isStepActive,
@@ -49,5 +51,15 @@ describe("transactionPhase helpers", () => {
     expect(isTerminalPhase("success")).toBe(true);
     expect(isTerminalPhase("failure")).toBe(true);
     expect(isTerminalPhase("polling")).toBe(false);
+  });
+
+  it("treats 'recovering' as a non-terminal phase with a label", () => {
+    expect(isTerminalPhase("recovering")).toBe(false);
+    expect(TX_PHASE_LABELS.recovering).toBeTruthy();
+  });
+
+  it("exposes a single-step recovery pipeline", () => {
+    expect(TX_PHASE_RECOVERY).toEqual(["recovering"]);
+    expect(stepIndexIn(TX_PHASE_RECOVERY, "recovering")).toBe(0);
   });
 });

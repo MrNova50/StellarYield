@@ -8,6 +8,7 @@ export type TxPhase =
   | "waiting_for_wallet"
   | "submitting"
   | "polling"
+  | "recovering"
   | "success"
   | "failure";
 
@@ -75,6 +76,10 @@ export const TX_PHASE_LABELS: Record<TxPhase, string> = {
   waiting_for_wallet: "Waiting for wallet",
   submitting: "Submitting",
   polling: "Confirming on network",
+  recovering: "Recovering transaction status",
   success: "Success",
   failure: "Failed",
 };
+
+/** Recovery pipeline shown after a poll timeout while checking finality by hash. */
+export const TX_PHASE_RECOVERY: readonly TxPhase[] = ["recovering"];
