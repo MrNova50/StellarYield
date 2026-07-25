@@ -1,5 +1,5 @@
 use crate::{events, DataKey, VaultError, YieldVault};
-use soroban_sdk::{symbol_short, Address, Bytes, Env, Vec};
+use soroban_sdk::{symbol_short, xdr::ToXdr, Address, Bytes, Env};
 
 impl YieldVault {
     /// Immediately pause all vault operations (deposit, withdraw, rebalance).
@@ -164,17 +164,8 @@ impl YieldVault {
         let network = env.ledger().network_id();
         let contract = env.current_contract_address();
 
-        let mut op_hash_input = Vec::new(env);
-        op_hash_input.push_back(network);
-        op_hash_input.push_back(contract.into());
-        op_hash_input.push_back(operation_type.into());
-        op_hash_input.push_back(nonce.into());
-        op_hash_input.push_back(expiry_timestamp.into());
-
-        let op_hash = env.crypto().sha256(&Bytes::from_slice(
-            env,
-            &op_hash_input.try_into_val(env).unwrap_or_default().to_xdr(env).as_slice(),
-        ));
+        let preimage = (network, contract, operation_type, nonce, expiry_timestamp).to_xdr(env);
+        let op_hash: Bytes = env.crypto().sha256(&preimage).into();
 
         // Check if already executed
         if env.storage().instance().has(&DataKey::ExecutedAdminOp(op_hash.clone())) {

@@ -14,6 +14,8 @@ pub enum FeeKey {
     MaxFeeBps,
     /// Total fees collected.
     TotalFeesCollected,
+    /// Address that receives protocol performance fees.
+    FeeRecipient,
 }
 
 /// A single APY data point used for computing the moving average.
@@ -189,6 +191,63 @@ impl YieldVault {
             .instance()
             .get(&FeeKey::TotalFeesCollected)
             .unwrap_or(0)
+    }
+
+    /// Update the address that receives protocol performance fees.
+    ///
+    /// Admin-only. Validates the recipient before writing storage so a rejected
+    /// update leaves prior state unchanged (rollback-safe).
+    ///
+    /// # Errors
+    /// * [`VaultError::Unauthorized`] — caller is not admin
+    /// * [`VaultError::InvalidRecipient`] — recipient is the vault contract itself
+    ///   (zero-equivalent / sink address for this contract)
+    pub fn set_fee_recipient_impl(
+        env: Env,
+        admin: Address,
+        new_recipient: Address,
+    ) -> Result<(), VaultError> {
+        Self::require_admin(&env, &admin)?;
+        Self::require_init(&env)?;
+
+        // Reject vault-self as fee recipient (zero-equivalent / malformed routing).
+        if new_recipient == env.current_contract_address() {
+            return Err(VaultError::InvalidRecipient);
+        }
+
+        let old_recipient: Address = env
+            .storage()
+            .instance()
+            .get(&FeeKey::FeeRecipient)
+            .unwrap_or_else(|| {
+                // Default: admin until an explicit recipient is configured.
+                env.storage()
+                    .instance()
+                    .get(&crate::DataKey::Admin)
+                    .unwrap_or(admin.clone())
+            });
+
+        // All checks passed — write then emit (no intermediate mutable state).
+        env.storage()
+            .instance()
+            .set(&FeeKey::FeeRecipient, &new_recipient);
+
+        // Topics: fee_rcp; data: (old, new, executor)
+        env.events().publish(
+            (symbol_short!("fee_rcp"),),
+            (old_recipient, new_recipient, admin),
+        );
+
+        Ok(())
+    }
+
+    /// View: current fee recipient. Defaults to admin when unset.
+    pub fn get_fee_recipient_impl(env: Env) -> Result<Address, VaultError> {
+        Self::require_init(&env)?;
+        if let Some(recipient) = env.storage().instance().get(&FeeKey::FeeRecipient) {
+            return Ok(recipient);
+        }
+        Self::get_storage_required(&env, &crate::DataKey::Admin)
     }
 
     /// Internal: compute the simple moving average of APY from history.

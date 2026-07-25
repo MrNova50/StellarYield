@@ -83,6 +83,8 @@ pub enum VaultError {
     OperationReplayed = 2004,
     /// Cross-contract call from unauthorized or wrong-network contract (maps to error code 2005).
     UnauthorizedContract = 2005,
+    /// Fee recipient is invalid (contract self or zero-equivalent) (maps to error code 2006).
+    InvalidRecipient = 2006,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────
@@ -770,6 +772,22 @@ impl YieldVault {
         YieldVault::get_total_referral_rewards_view(env)
     }
 
+    // ── Fee recipient admin ──────────────────────────────────────────
+
+    /// Admin: update the address that receives protocol performance fees.
+    pub fn set_fee_recipient(
+        env: Env,
+        admin: Address,
+        new_recipient: Address,
+    ) -> Result<(), VaultError> {
+        YieldVault::set_fee_recipient_impl(env, admin, new_recipient)
+    }
+
+    /// View: current fee recipient (defaults to admin when unset).
+    pub fn get_fee_recipient(env: Env) -> Result<Address, VaultError> {
+        YieldVault::get_fee_recipient_impl(env)
+    }
+
     // ── Internal ────────────────────────────────────────────────────
 
     fn require_init(env: &Env) -> Result<(), VaultError> {
@@ -959,8 +977,8 @@ impl VaultStandard for YieldVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{contract, contractimpl, Env};
+    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::{contract, contractimpl, Env, IntoVal};
 
     #[contract]
     struct ContractWallet;
@@ -1367,6 +1385,88 @@ mod tests {
         let (env, client, _, _, _) = setup_env();
         let unknown = Address::generate(&env);
         assert_eq!(client.get_referral_rewards(&unknown), 0);
+    }
+
+    // ── Fee recipient admin flows (#958) ───────────────────────────────
+
+    #[test]
+    fn test_fee_recipient_defaults_to_admin() {
+        let (_, client, admin, _, _) = setup_env();
+        assert_eq!(client.get_fee_recipient(), admin);
+    }
+
+    #[test]
+    fn test_set_fee_recipient_by_admin() {
+        let (env, client, admin, _, _) = setup_env();
+        let recipient = Address::generate(&env);
+
+        client.set_fee_recipient(&admin, &recipient);
+        assert_eq!(client.get_fee_recipient(), recipient);
+    }
+
+    #[test]
+    fn test_set_fee_recipient_unauthorized_rejected() {
+        let (env, client, _, _, _) = setup_env();
+        let impostor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let result = client.try_set_fee_recipient(&impostor, &recipient);
+        assert_eq!(result, Err(Ok(VaultError::Unauthorized)));
+        // Prior state unchanged
+        assert_eq!(client.get_fee_recipient(), client.get_admin());
+    }
+
+    #[test]
+    fn test_set_fee_recipient_rejects_vault_self() {
+        let (_env, client, admin, _, _) = setup_env();
+        let vault_id = client.address.clone();
+
+        let result = client.try_set_fee_recipient(&admin, &vault_id);
+        assert_eq!(result, Err(Ok(VaultError::InvalidRecipient)));
+        // Rollback-safe: still defaults to admin
+        assert_eq!(client.get_fee_recipient(), admin);
+    }
+
+    #[test]
+    fn test_set_fee_recipient_emits_old_new_executor() {
+        let (env, client, admin, _, _) = setup_env();
+        let recipient = Address::generate(&env);
+
+        client.set_fee_recipient(&admin, &recipient);
+
+        let events = env.events().all();
+        assert!(
+            !events.is_empty(),
+            "fee recipient update must emit an event"
+        );
+        // Event tuple: (contract, topics, data); data = (old, new, executor)
+        let (_contract, _topics, data) = events.last().unwrap();
+        let decoded: (Address, Address, Address) = data.clone().into_val(&env);
+        assert_eq!(decoded.0, admin);
+        assert_eq!(decoded.1, recipient);
+        assert_eq!(decoded.2, admin);
+    }
+
+    #[test]
+    fn test_set_fee_recipient_repeated_updates_and_rollback() {
+        let (env, client, admin, _, _) = setup_env();
+        let first = Address::generate(&env);
+        let second = Address::generate(&env);
+
+        client.set_fee_recipient(&admin, &first);
+        assert_eq!(client.get_fee_recipient(), first);
+
+        client.set_fee_recipient(&admin, &second);
+        assert_eq!(client.get_fee_recipient(), second);
+
+        // Failed update must not clobber current recipient
+        let result = client.try_set_fee_recipient(&admin, &client.address);
+        assert_eq!(result, Err(Ok(VaultError::InvalidRecipient)));
+        assert_eq!(client.get_fee_recipient(), second);
+
+        // Rollback to a prior recipient remains valid
+        client.set_fee_recipient(&admin, &first);
+        assert_eq!(client.get_fee_recipient(), first);
     }
 }
 
