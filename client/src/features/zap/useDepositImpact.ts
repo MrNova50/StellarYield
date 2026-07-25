@@ -7,6 +7,29 @@ export interface DepositImpactResult {
   reasons: string[];
   /** Estimated execution-quality degradation 0-100 */
   impactScore: number;
+  /** Whether the deposit should be blocked due to stale/high-impact quote */
+  shouldBlock: boolean;
+  /** Human-readable block reason if shouldBlock is true */
+  blockReason?: string;
+}
+
+export interface QuoteSnapshot {
+  /** When the quote was generated */
+  quotedAt: string;
+  /** Route hops */
+  route: string[];
+  /** Expected output in stroops */
+  expectedOut: bigint;
+  /** Minimum output after slippage in stroops */
+  minOut: bigint;
+  /** Previous expectedOut for delta calculation */
+  prevExpectedOut?: bigint;
+  /** Whether the quote came from fallback */
+  isFallback: boolean;
+  /** Whether the quote is stale */
+  isStale: boolean;
+  /** Quote source identifier */
+  source?: string;
 }
 
 interface UseDepositImpactInput {
@@ -22,6 +45,12 @@ interface UseDepositImpactInput {
   executionQualityScore?: number;
   /** materialImpact flag from the fragmentation API */
   materialImpact?: boolean;
+  /** Current quote snapshot for route/amount tracking */
+  quote?: QuoteSnapshot;
+  /** Route impact threshold for blocking (0-100, default 75) */
+  routeImpactThreshold?: number;
+  /** Whether to enforce stale quote blocking */
+  blockStaleQuotes?: boolean;
 }
 
 const WARNING_SLIPPAGE_PCT = 3;
@@ -30,10 +59,23 @@ const WARNING_AMOUNT_USD = 50_000;
 const CRITICAL_AMOUNT_USD = 500_000;
 const LOW_EXECUTION_QUALITY = 70;
 const CRITICAL_EXECUTION_QUALITY = 50;
+const DEFAULT_ROUTE_IMPACT_THRESHOLD = 75;
+const MAX_QUOTE_AGE_MS = 60_000;
+
+/**
+ * Computes output impact delta as a percentage.
+ * Returns the magnitude of change between previous and current expected output.
+ */
+function computeOutputDelta(prev: bigint | undefined, current: bigint): number {
+  if (!prev || prev <= 0n || current <= 0n) return 0;
+  const delta = Number(current - prev) / Number(prev);
+  return Math.abs(delta) * 100;
+}
 
 /**
  * Pure hook — computes deposit route impact without side effects.
- * Returns the severity, human-readable reasons, and a composite impact score.
+ * Returns the severity, human-readable reasons, a composite impact score,
+ * and whether the deposit should be blocked.
  */
 export function useDepositImpact(input: UseDepositImpactInput): DepositImpactResult {
   return useMemo(() => {
@@ -68,6 +110,26 @@ export function useDepositImpact(input: UseDepositImpactInput): DepositImpactRes
       impactScore += 10;
     }
 
+    // Route output delta
+    if (input.quote) {
+      const outputDelta = computeOutputDelta(input.quote.prevExpectedOut, input.quote.expectedOut);
+      if (outputDelta >= 10) {
+        reasons.push(`Quote output changed by ${outputDelta.toFixed(1)}% since last fetch — possible route shift`);
+        impactScore += 25;
+      } else if (outputDelta > 5) {
+        reasons.push(`Quote output changed by ${outputDelta.toFixed(1)}% — minor route variation`);
+        impactScore += 10;
+      }
+
+      // Quote age signal
+      const quoteAgeMs = Date.now() - new Date(input.quote.quotedAt).getTime();
+      if (quoteAgeMs > MAX_QUOTE_AGE_MS) {
+        const ageSec = Math.floor(quoteAgeMs / 1000);
+        reasons.push(`Quote is ${ageSec}s old — freshness degraded`);
+        impactScore += 15;
+      }
+    }
+
     // Fragmentation signals
     if (input.executionQualityScore !== undefined) {
       if (input.executionQualityScore < CRITICAL_EXECUTION_QUALITY) {
@@ -93,6 +155,19 @@ export function useDepositImpact(input: UseDepositImpactInput): DepositImpactRes
       severity = "warning";
     }
 
-    return { severity, reasons, impactScore: clampedScore };
+    // Block conditions
+    let shouldBlock = false;
+    let blockReason: string | undefined;
+
+    const blockStale = input.blockStaleQuotes !== false;
+    if (blockStale && input.isStale) {
+      shouldBlock = true;
+      blockReason = "Quote is stale. Refresh to get current rates before submitting.";
+    } else if (severity === "critical" && clampedScore >= (input.routeImpactThreshold ?? DEFAULT_ROUTE_IMPACT_THRESHOLD)) {
+      shouldBlock = true;
+      blockReason = "Route impact exceeds safety threshold. Reduce amount or adjust slippage.";
+    }
+
+    return { severity, reasons, impactScore: clampedScore, shouldBlock, blockReason };
   }, [input]);
 }

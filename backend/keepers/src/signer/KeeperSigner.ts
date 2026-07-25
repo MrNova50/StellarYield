@@ -1,39 +1,76 @@
 import {
   rpc,
-  Keypair,
-  TransactionBuilder,
   Networks,
   xdr,
   Contract,
-  Address,
+  TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import {
+  LocalSignerProvider,
+  UnauthorizedOperationError,
+  type SignerProvider,
+} from './SignerProvider';
+import { createKeeperAuditLog } from '../audit/KeeperAuditLog';
+
+export type { SignerProvider } from './SignerProvider';
+export { UnauthorizedOperationError } from './SignerProvider';
+
+export interface KeeperAuditContext {
+  workerName: string;
+  jobId?: string;
+  policyVersion?: string;
+}
+
+export interface KeeperSignerOptions {
+  /** Opt-in tamper-evident audit logging (see issue #912). No-op when omitted. */
+  auditLog?: ReturnType<typeof createKeeperAuditLog>;
+}
+
+function safeArgsSummary(args: xdr.ScVal[]): string[] {
+  return args.map((arg) => {
+    try {
+      return arg.toXDR('base64');
+    } catch {
+      return String(arg);
+    }
+  });
+}
 
 /**
- * KeeperSigner manages the keeper bot's signing keypair and handles the
+ * KeeperSigner manages the keeper bot's signing authority and handles the
  * complete Soroban transaction lifecycle:
  *   1. Build a TransactionBuilder with the current sequence number
  *   2. Simulate the transaction to get resource fees
- *   3. Sign the transaction with the keeper's secret key
+ *   3. Sign the transaction via the active SignerProvider
  *   4. Submit and poll for confirmation
  *
- * Security note: In production, replace `Keypair.fromSecret()` with a KMS
- * adapter that never exposes the raw private key in-process.
+ * Signing itself is delegated to a `SignerProvider` (local secret, env
+ * secret, or an external/KMS-backed callback — see `./SignerProvider.ts`),
+ * which also declares which contract methods it is allowed to authorize.
+ * `invokeContract` rejects any other method before building a transaction.
  */
 export class KeeperSigner {
-  private readonly keypair: Keypair;
+  private readonly provider: SignerProvider;
   private readonly server: rpc.Server;
   private readonly networkPassphrase: string;
+  private readonly auditLog?: ReturnType<typeof createKeeperAuditLog>;
 
-  constructor(secretKey?: string) {
-    const key = secretKey ?? config.stellar.keeperSecretKey;
-    if (!key) {
-      throw new Error(
-        'KEEPER_SECRET_KEY is not set. Provide a valid Stellar secret key.',
-      );
+  constructor(secretKeyOrProvider?: string | SignerProvider, options?: KeeperSignerOptions) {
+    if (secretKeyOrProvider && typeof secretKeyOrProvider === 'object') {
+      this.provider = secretKeyOrProvider;
+    } else {
+      const key = secretKeyOrProvider ?? config.stellar.keeperSecretKey;
+      if (!key) {
+        throw new Error(
+          'KEEPER_SECRET_KEY is not set. Provide a valid Stellar secret key.',
+        );
+      }
+      this.provider = new LocalSignerProvider(key);
     }
-    this.keypair = Keypair.fromSecret(key);
+
+    this.auditLog = options?.auditLog;
     this.server = new rpc.Server(config.stellar.sorobanRpcUrl, {
       allowHttp: true,
     });
@@ -43,9 +80,29 @@ export class KeeperSigner {
         : Networks.TESTNET;
   }
 
-  /** Public key of the keeper bot account */
+  /** Public key of the currently active signer */
   get publicKey(): string {
-    return this.keypair.publicKey();
+    return this.provider.publicKey;
+  }
+
+  private recordDecision(
+    auditContext: KeeperAuditContext | undefined,
+    contractId: string,
+    method: string,
+    args: xdr.ScVal[],
+    extra: { simulationResult?: unknown; txOutcome?: { status: 'success' | 'failure'; hash?: string; error?: string } },
+  ): void {
+    if (!this.auditLog || !auditContext) return;
+    this.auditLog.appendDecision(auditContext.workerName, {
+      workerName: auditContext.workerName,
+      jobId: auditContext.jobId,
+      policyVersion: auditContext.policyVersion ?? 'unversioned',
+      contractId,
+      method,
+      inputs: { contractId, method, args: safeArgsSummary(args) },
+      decision: `invoke ${method} on ${contractId}`,
+      ...extra,
+    });
   }
 
   /**
@@ -55,16 +112,29 @@ export class KeeperSigner {
    * @param contractId - The Soroban contract C-address
    * @param method     - The contract function name to invoke
    * @param args       - xdr.ScVal arguments to pass
+   * @param auditContext - Optional worker/job metadata for the tamper-evident
+   *                       audit trail (see issue #912); no-op if `auditLog`
+   *                       wasn't supplied to this instance.
    * @returns The transaction hash on success
-   * @throws  On simulation error, auth failure, or submission failure
+   * @throws  On unauthorized operation, simulation error, auth failure, or submission failure
    */
   async invokeContract(
     contractId: string,
     method: string,
     args: xdr.ScVal[] = [],
     options?: { requiredSequence?: number; fencingToken?: number; persistRecord?: (record: import('../queues/types').JobAttemptRecord) => Promise<void> },
+    auditContext?: KeeperAuditContext,
   ): Promise<string> {
-    const account = await this.server.getAccount(this.keypair.publicKey());
+    if (!this.provider.allowedOperations.has(method)) {
+      throw new UnauthorizedOperationError(method, this.provider.id);
+    }
+
+    logger.info(
+      { providerId: this.provider.id, publicKey: this.provider.publicKey, method, contractId },
+      '[KeeperSigner] Signer selected for job',
+    );
+
+    const account = await this.server.getAccount(this.provider.publicKey);
 
     if (options?.requiredSequence !== undefined) {
       const currentSequence = Number((account as any).sequence);
@@ -107,11 +177,19 @@ export class KeeperSigner {
 
     // Prepare (inflate) with resource fees from simulation
     const preparedTx = rpc.assembleTransaction(tx, sim).build();
-    preparedTx.sign(this.keypair);
+    const signedTx = await this.provider.sign(preparedTx, this.networkPassphrase);
 
-    const sendResult = await this.server.sendTransaction(preparedTx);
+    this.recordDecision(auditContext, contractId, method, args, {
+      simulationResult: { minResourceFee: (sim as any).minResourceFee ?? null },
+    });
+
+    const sendResult = await this.server.sendTransaction(signedTx);
     if (sendResult.status === 'ERROR') {
-      throw new Error(`sendTransaction failed: ${sendResult.errorResult?.toXDR('base64')}`);
+      const errorMessage = `sendTransaction failed: ${sendResult.errorResult?.toXDR('base64')}`;
+      this.recordDecision(auditContext, contractId, method, args, {
+        txOutcome: { status: 'failure', error: errorMessage },
+      });
+      throw new Error(errorMessage);
     }
 
     const hash = sendResult.hash;
@@ -132,8 +210,19 @@ export class KeeperSigner {
       });
     }
 
-    // Poll for confirmation
-    await this.pollForConfirmation(hash);
+    try {
+      await this.pollForConfirmation(hash);
+    } catch (err) {
+      this.recordDecision(auditContext, contractId, method, args, {
+        txOutcome: { status: 'failure', hash, error: err instanceof Error ? err.message : String(err) },
+      });
+      throw err;
+    }
+
+    this.recordDecision(auditContext, contractId, method, args, {
+      txOutcome: { status: 'success', hash },
+    });
+
     return hash;
   }
 

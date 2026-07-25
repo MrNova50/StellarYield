@@ -116,9 +116,10 @@ export class LiquidationWorker {
         config.contracts.stablecoinManager,
         'liquidate',
         [liquidatorScVal, userScVal],
+        undefined,
+        { workerName: 'LiquidationWorker', jobId: job.id, policyVersion: 'v1' },
       );
 
-      // Persist submitted state
       await persistJobRecord({
         jobId: job.id!,
         queueName: QUEUE_NAMES.LIQUIDATION,

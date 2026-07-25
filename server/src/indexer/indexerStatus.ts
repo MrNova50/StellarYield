@@ -39,6 +39,10 @@ export interface IndexerStatus {
   lastIndexedAt: string | null;
   heartbeatAgeSeconds: number | null;
   recentErrors: IndexerReplayError[];
+  /** Number of unresolved dead-letter events. */
+  deadLetterCount: number;
+  /** Oldest unresolved dead-letter event timestamp (ISO string), if any. */
+  oldestDeadLetterAt: string | null;
   generatedAt: string;
 }
 
@@ -99,6 +103,8 @@ export function classifyIndexerStatus(input: IndexerStatusInput): IndexerStatus 
     lastIndexedAt: input.lastIndexedAt,
     heartbeatAgeSeconds,
     recentErrors: input.recentErrors,
+    deadLetterCount: 0,
+    oldestDeadLetterAt: null,
     generatedAt: new Date(now).toISOString(),
   };
 }

@@ -111,6 +111,37 @@ model Referral {
   @@index([referrerAddress])
 }
 
+// ── Dead-Letter Queue for Event Decoder Failures (Issue #889) ──────────────
+
+model DeadLetterEvent {
+  id              String   @id @default(uuid())
+  // Raw event reference for replay
+  ledger          Int
+  txHash          String
+  contractId      String
+  topic           String   // Raw topic XDR
+  data            String   // Raw event value XDR
+  // Decoder metadata
+  decoderVersion  String   // Semver of decoder at time of failure
+  errorClass      String   // e.g. "DecodeError", "ValidationError", "ProjectorError"
+  errorMessage    String   // Human-readable error description
+  // Retry state
+  retryCount      Int      @default(0)
+  maxRetries      Int      @default(3)
+  nextRetryAt     DateTime // When the next retry is attempted
+  lastErrorAt     DateTime?
+  // Resolution
+  resolved        Boolean  @default(false)
+  resolvedAt      DateTime?
+  // Audit
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([ledger, resolved])
+  @@index([nextRetryAt, resolved])
+  @@index([resolved, createdAt])
+}
+
 // ── APY Alert Models ─────────────────────────────────────────────────────────
 
 model UserAlert {
@@ -238,6 +269,75 @@ model RebalanceHistory {
   @@index([completedAt])
 }
 
+// ── Withdrawal Queue Models (Issue #900) ────────────────────────────────────
+
+model WithdrawalQueueEntry {
+  id                  String   @id @default(uuid())
+  vaultId             String
+  walletAddress       String
+  status              String   @default("QUEUED") // QUEUED, EXECUTABLE, EXECUTING, COMPLETED, EXPIRED, CANCELLED
+  
+  // Withdrawal request details
+  shares              Float    // Shares to burn
+  expectedAmount      Float    // Expected withdrawal amount at queue time
+  minAmountOut        Float    // Minimum acceptable amount (slippage protection)
+  maxSlippageBps      Int      // Maximum acceptable slippage in basis points
+  
+  // Queue position and execution
+  queuePosition       Int      // Deterministic ordering within same ledger
+  submittedLedger     Int      // Ledger when request was submitted
+  executableAfter     DateTime // Earliest time this can execute
+  expiresAt           DateTime // Expiry time for the request
+  
+  // Liquidity constraints
+  liquidityRequired   Float    // Amount of liquidity needed
+  liquidityAvailable  Float?   // Available liquidity at execution time
+  partialFillEnabled  Boolean  @default(false)
+  partialFillAmount   Float?   // Amount filled if partial
+  
+  // Execution tracking
+  actualAmount        Float?   // Actual amount withdrawn
+  actualSlippageBps   Int?     // Actual slippage experienced
+  executedAt          DateTime?
+  executedLedger      Int?
+  transactionHash     String?
+  
+  // Cancellation
+  cancelledAt         DateTime?
+  cancelledBy         String?
+  cancellationReason  String?
+  
+  // Audit
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([vaultId, status, queuePosition])
+  @@index([walletAddress, status])
+  @@index([status, executableAfter])
+  @@index([expiresAt, status])
+}
+
+model WithdrawalQueueHistory {
+  id                  String   @id @default(uuid())
+  queueEntryId        String   @unique
+  vaultId             String
+  walletAddress       String
+  
+  shares              Float
+  expectedAmount      Float
+  actualAmount        Float
+  slippageBps         Int
+  
+  status              String   // Final status: COMPLETED | EXPIRED | CANCELLED
+  executedAt          DateTime?
+  transactionHash     String?
+  
+  createdAt           DateTime @default(now())
+
+  @@index([vaultId, executedAt])
+  @@index([walletAddress, createdAt])
+}
+
 // ── Strategy Snapshot Models (Issue #282) ────────────────────────────────────
 
 model StrategySnapshot {
@@ -317,4 +417,194 @@ model PortfolioRegimeShiftAlert {
 
   @@index([walletAddress, createdAt])
   @@index([walletAddress, currentRegime, createdAt])
+}
+
+// ── Reconciliation Anomaly Models (Issue #895) ──────────────────────────────
+
+model ReconciliationEvent {
+  id              String   @id @default(uuid())
+  walletAddress   String
+  vaultId         String?
+  status          String   // success | partial | failed
+  changeCount     Int      @default(0)
+  mismatchCount   Int      @default(0)
+  error           String?
+  triggeredBy     String?  // MANUAL | AUTO | SCHEDULED
+  acknowledgedAt  DateTime?
+  acknowledgedBy  String?
+  resolvedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  anomalies       ReconciliationAnomaly[]
+
+  @@index([walletAddress, createdAt])
+  @@index([status, createdAt])
+  @@index([vaultId, createdAt])
+}
+
+model ReconciliationAnomaly {
+  id              String   @id @default(uuid())
+  eventId         String
+  event           ReconciliationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  assetId         String
+  accountId       String?
+  ledgerWindow    String?  // Ledger range where anomaly occurred
+  anomalyType     String   // ORPHANED | DUPLICATE | MISSING | DISCREPANCY
+  severity        String   // warning | critical
+  
+  chainValue      Float?
+  cachedValue     Float?
+  discrepancy     Float?
+  
+  remediation     String?  // Suggested fix
+  remediationApplied Boolean @default(false)
+  remediationDetails Json?
+  
+  resolvedAt      DateTime?
+  resolvedBy      String?
+  resolutionNotes String?
+  
+  createdAt       DateTime @default(now())
+
+  @@index([eventId, severity])
+  @@index([anomalyType, severity, resolvedAt])
+  @@index([assetId, createdAt])
+}
+
+// ── Indexer Continuity Models (Issue #891) ──────────────────────────────────
+
+model IndexerGapEvent {
+  id              String   @id @default(uuid())
+  contractId      String?
+  gapType         String   // LEDGER_SKIP | ROLLBACK | REGRESSION | NETWORK_DRIFT
+  severity        String   // INFO | WARNING | CRITICAL
+  
+  fromLedger      Int
+  toLedger        Int
+  gapSize         Int
+  
+  detectedAt      DateTime @default(now())
+  recoveredAt     DateTime?
+  recoveryStatus  String   @default("PENDING") // PENDING | IN_PROGRESS | RECOVERED | UNRECOVERABLE
+  recoveryAttempts Int     @default(0)
+  
+  errorMessage    String?
+  context         Json?    // Additional context about the gap
+  
+  @@index([contractId, detectedAt])
+  @@index([recoveryStatus, detectedAt])
+  @@index([gapType, severity])
+}
+
+model IndexerContinuityCheck {
+  id              String   @id @default(uuid())
+  networkPassphrase String
+  contractDeploymentLedger Int
+  expectedContractId String
+  actualContractId String?
+  
+  status          String   // VALID | INVALID | MISMATCH
+  checkType       String   // NETWORK_VALIDATION | CONTRACT_VALIDATION | LEDGER_CONTINUITY
+  
+  errorMessage    String?
+  checkedAt       DateTime @default(now())
+  
+  @@index([status, checkedAt])
+  @@index([checkType, checkedAt])
+}
+
+// ── Per-Contract Cursor Models (Issue #888) ─────────────────────────────────
+
+model ContractIndexerCursor {
+  id              String   @id @default(uuid())
+  contractId      String   @unique
+  networkId       String   // testnet | mainnet | futurenet
+  streamType      String   @default("events") // events | diagnostics | transactions
+  
+  lastLedger      Int
+  lastTxHash      String?
+  lastProcessedAt DateTime @default(now())
+  
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | ERROR
+  errorCount      Int      @default(0)
+  lastError       String?
+  lastErrorAt     DateTime?
+  
+  checkpointAge   Int?     // Seconds since last checkpoint
+  cursorPosition  String?  // RPC pagination cursor
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([contractId, networkId, streamType])
+  @@index([status, lastProcessedAt])
+  @@index([networkId, lastLedger])
+}
+
+model EventIngestionLog {
+  id              String   @id @default(uuid())
+  contractId      String
+  ledger          Int
+  txHash          String
+  eventIdentity   String   // Unique event identity for idempotency
+  
+  rawXdr          String?  // Raw XDR data
+  topics          Json     // Parsed topics
+  decoderVersion  String   // Version of decoder used
+  
+  ingestedAt      DateTime @default(now())
+  replayedFrom    String?  // If replayed, which checkpoint
+  
+  @@unique([eventIdentity]) // Ensure idempotency
+  @@index([contractId, ledger])
+  @@index([txHash])
+}
+
+// ── Projection Rebuild Models (Issue #890) ──────────────────────────────────
+
+model ProjectionVersion {
+  id              String   @id @default(uuid())
+  vaultId         String
+  version         Int      // Incremental version number
+  projectionType  String   // vault_balance | share_supply | deposits | withdrawals | harvests | rebalances
+  
+  rebuiltFromLedger Int    // Starting ledger for rebuild
+  rebuiltToLedger Int      // Ending ledger for rebuild
+  eventCount      Int      // Number of events consumed
+  
+  status          String   @default("ACTIVE") // ACTIVE | SUPERSEDED | AUDIT_FAILED
+  auditStatus     String?  // PASSED | FAILED | DRIFT_DETECTED
+  auditDrift      Float?   // Discrepancy if audit failed
+  
+  metadata        Json?    // Additional rebuild metadata
+  createdAt       DateTime @default(now())
+  supersededAt    DateTime?
+  
+  @@unique([vaultId, projectionType, version])
+  @@index([vaultId, projectionType, status])
+  @@index([status, createdAt])
+}
+
+model ProjectionAuditLog {
+  id              String   @id @default(uuid())
+  projectionVersionId String
+  vaultId         String
+  projectionType  String
+  
+  auditType       String   // FULL_REBUILD | AUDIT_ONLY | INCREMENTAL
+  expectedState   Json     // Expected values from rebuild
+  actualState     Json     // Current projection state
+  
+  hasDrift        Boolean  @default(false)
+  driftDetails    Json?    // Detailed drift information
+  firstDivergentLedger Int?
+  firstDivergentEvent  String?
+  
+  auditedAt       DateTime @default(now())
+  auditedBy       String?  // CLI | SCHEDULED | MANUAL
+  
+  @@index([projectionVersionId])
+  @@index([vaultId, auditType, auditedAt])
+  @@index([hasDrift, auditedAt])
 }

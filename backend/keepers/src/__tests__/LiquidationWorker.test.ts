@@ -74,6 +74,7 @@ describe('LiquidationWorker', () => {
       expect.any(String),
       'liquidate',
       expect.arrayContaining([expect.anything(), expect.anything()]),
+      expect.objectContaining({ workerName: 'LiquidationWorker', jobId: '1' }),
     );
     expect(result).toEqual({ txHash: 'LIQUIDATION_TX_HASH' });
   });

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Landmark, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { ZapDepositPanel } from "../features/zap";
+import { WithdrawPanel } from "../features/withdraw";
 import { useWallet } from "../context/useWallet";
 import { useVaultOgMeta } from "../hooks/useVaultOgMeta";
 import { RecoveryAdvisor } from "./AIAdvisor/RecoveryAdvisor";
@@ -32,6 +33,7 @@ export default function Vault() {
   const [stats, setStats] = useState<VaultStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(!isSlugValid);
+  const [vaultAction, setVaultAction] = useState<"deposit" | "withdraw">("deposit");
 
   const meta = useVaultOgMeta(activeSlug);
 
@@ -164,7 +166,36 @@ export default function Vault() {
       </div>
 
       <div className="glass-panel p-8 mt-8 max-w-3xl w-full text-left">
-        <ZapDepositPanel walletAddress={walletAddress} />
+        <div className="flex items-center justify-center gap-2 mb-6">
+          <button
+            type="button"
+            onClick={() => setVaultAction("deposit")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              vaultAction === "deposit"
+                ? "bg-green-500/20 text-green-400"
+                : "text-gray-400 hover:text-white"
+            }`}
+          >
+            Deposit
+          </button>
+          <button
+            type="button"
+            onClick={() => setVaultAction("withdraw")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              vaultAction === "withdraw"
+                ? "bg-green-500/20 text-green-400"
+                : "text-gray-400 hover:text-white"
+            }`}
+          >
+            Withdraw
+          </button>
+        </div>
+
+        {vaultAction === "deposit" ? (
+          <ZapDepositPanel walletAddress={walletAddress} />
+        ) : (
+          <WithdrawPanel walletAddress={walletAddress} />
+        )}
       </div>
     </div>
   );

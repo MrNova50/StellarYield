@@ -154,6 +154,11 @@ impl YieldVault {
     /// This is called internally from harvest / withdrawal logic.
     /// Operates only on the yield — never on principal.
     ///
+    /// ## Invariants:
+    /// 1. yield_in = user_yield + donation
+    /// 2. donation cannot exceed yield_amount
+    /// 3. net >= 0 (user always gets non-negative yield)
+    ///
     /// # Arguments
     /// * `env`          — Contract environment.
     /// * `user`         — The user whose yield is being harvested.
@@ -199,6 +204,24 @@ impl YieldVault {
         let donation = (yield_amount * bps) / BPS_DENOMINATOR;
         let net = yield_amount - donation; // Always >= 0 since bps <= 10_000
 
+        // INVARIANT: donation cannot exceed yield_amount
+        if donation > yield_amount {
+            env.events().publish(
+                (symbol_short!("don_err"),),
+                (user.clone(), donation, yield_amount),
+            );
+            return yield_amount;
+        }
+
+        // INVARIANT: net must be non-negative
+        if net < 0 {
+            env.events().publish(
+                (symbol_short!("don_err"),),
+                (user.clone(), net, 0i128),
+            );
+            return yield_amount;
+        }
+
         if donation > 0 {
             let token_client = token::Client::new(env, token_id);
             // Transfer from the contract's own balance to the charity.
@@ -219,6 +242,14 @@ impl YieldVault {
             env.events().publish(
                 (symbol_short!("donated"),),
                 (user.clone(), charity, donation),
+            );
+        }
+
+        // INVARIANT CHECK: yield_in == user_yield + donation
+        if net + donation != yield_amount {
+            env.events().publish(
+                (symbol_short!("don_cons"),),
+                (user.clone(), yield_amount, net, donation),
             );
         }
 

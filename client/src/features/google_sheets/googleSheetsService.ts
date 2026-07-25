@@ -10,6 +10,11 @@ import {
   REQUIRED_SHEETS_SCOPE,
   type GoogleAuthErrorCode,
 } from "./errors";
+import {
+  computeDryRunSyncPlan,
+  type DryRunSyncSummary,
+  type ExistingSheetRow,
+} from "./dryRunSync";
 
 const STORAGE_KEY = "stellar_yield_google_sheets";
 const SESSION_KEY = "stellar_yield_google_oauth";
@@ -157,6 +162,45 @@ export class GoogleSheetsService {
 
         this.saveConfig(config);
         return config;
+    }
+
+    /**
+     * Preview what a sync of `metrics` would do to the linked spreadsheet
+     * without writing anything: fetches the current sheet contents and
+     * diffs them against `metrics` to classify each row as added, updated,
+     * skipped, or conflicted (#962).
+     */
+    async previewSync(metrics: DailyYieldMetric[]): Promise<DryRunSyncSummary> {
+        const session = await this.ensureValidSession();
+        const config = this.getConfig();
+
+        if (!config) {
+            throw new Error("Google Sheets not configured");
+        }
+
+        const existingRows = await this.fetchExistingRows(session, config);
+        return computeDryRunSyncPlan(metrics, existingRows);
+    }
+
+    private async fetchExistingRows(
+        session: GoogleOAuthSession,
+        config: GoogleSheetsConfig,
+    ): Promise<ExistingSheetRow[]> {
+        const params = new URLSearchParams({
+            spreadsheetId: config.spreadsheetId,
+            sheetName: config.sheetName,
+        });
+
+        const response = await fetch(`/api/google-sheets/rows?${params}`, {
+            headers: { Authorization: `Bearer ${session.accessToken}` },
+        });
+
+        if (!response.ok) {
+            throw await this.parseApiError(response, "Failed to read spreadsheet rows");
+        }
+
+        const data = (await response.json()) as { rows?: ExistingSheetRow[] };
+        return data.rows ?? [];
     }
 
     async appendYieldMetrics(metrics: DailyYieldMetric[]): Promise<void> {

@@ -1,4 +1,10 @@
-import { KeeperSigner } from '../signer/KeeperSigner';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { KeeperSigner, UnauthorizedOperationError } from '../signer/KeeperSigner';
+import { LocalSignerProvider } from '../signer/SignerProvider';
+import { createKeeperAuditLog } from '../audit/KeeperAuditLog';
+import { logger } from '../utils/logger';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 // IMPORTANT: jest.mock() is hoisted to the top of the file by Babel/ts-jest,
@@ -218,6 +224,12 @@ describe('KeeperSigner', () => {
     const signer = new KeeperSigner(FAKE_SECRET);
     const promise = signer.invokeContract('CCONTRACT', 'harvest', []);
 
+    // Flush the microtask chain up through simulate/sign/send before the
+    // first poll `sleep()` registers its timer.
+    for (let i = 0; i < 3; i++) {
+      await Promise.resolve();
+    }
+
     // Advance fake timers to flush the polling sleep calls
     for (let i = 0; i < 5; i++) {
       await Promise.resolve();
@@ -257,5 +269,85 @@ describe('KeeperSigner', () => {
 
     await expect(promise).rejects.toThrow('did not confirm within timeout');
     jest.useRealTimers();
+  });
+
+  // ── #911: operation allowlist ─────────────────────────────────────────────
+
+  test('invokeContract rejects an unauthorized operation before any account/transaction work', async () => {
+    const signer = new KeeperSigner(FAKE_SECRET);
+
+    await expect(
+      signer.invokeContract('CCONTRACT', 'admin_withdraw', []),
+    ).rejects.toBeInstanceOf(UnauthorizedOperationError);
+
+    const server = getMockServer();
+    expect(server.getAccount).not.toHaveBeenCalled();
+    expect(server.simulateTransaction).not.toHaveBeenCalled();
+  });
+
+  test('a custom provider can authorize a narrower operation set than the default', async () => {
+    const provider = new LocalSignerProvider(FAKE_SECRET, ['harvest']);
+    const signer = new KeeperSigner(provider);
+
+    await expect(
+      signer.invokeContract('CCONTRACT', 'liquidate', []),
+    ).rejects.toBeInstanceOf(UnauthorizedOperationError);
+
+    // The allowed operation still succeeds.
+    const hash = await signer.invokeContract('CCONTRACT', 'harvest', []);
+    expect(hash).toBe('TXHASH123');
+  });
+
+  // ── #911: no key material in logs ─────────────────────────────────────────
+
+  test('no substring of the secret key ever appears in a logger call across a full invoke cycle', async () => {
+    const infoSpy = jest.spyOn(logger, 'info');
+    const errorSpy = jest.spyOn(logger, 'error');
+
+    const signer = new KeeperSigner(FAKE_SECRET);
+    await signer.invokeContract('CCONTRACT', 'liquidate', []);
+
+    const allCallArgs = [...infoSpy.mock.calls, ...errorSpy.mock.calls];
+    const serialized = JSON.stringify(allCallArgs);
+
+    expect(serialized).not.toContain(FAKE_SECRET);
+    infoSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // ── #912: audit hook integration ──────────────────────────────────────────
+
+  test('when an auditLog and auditContext are supplied, invokeContract records a decision and a success outcome', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keeper-signer-audit-'));
+    const auditLog = createKeeperAuditLog(dir);
+    const signer = new KeeperSigner(FAKE_SECRET, { auditLog });
+
+    const hash = await signer.invokeContract('CCONTRACT', 'liquidate', [], {
+      workerName: 'LiquidationWorker',
+      jobId: 'job-42',
+      policyVersion: 'v1',
+    });
+
+    expect(hash).toBe('TXHASH123');
+
+    const records = auditLog.exportStream('LiquidationWorker');
+    expect(records).toHaveLength(2);
+    expect(records[0].txOutcome).toBeNull();
+    expect(records[0].simulationResult).toBeDefined();
+    expect(records[1].txOutcome).toEqual({ status: 'success', hash: 'TXHASH123' });
+    expect(auditLog.verifyStreamIntegrity('LiquidationWorker').isValid).toBe(true);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('invokeContract without an auditContext performs no audit writes even when auditLog is supplied', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keeper-signer-audit-noop-'));
+    const auditLog = createKeeperAuditLog(dir);
+    const signer = new KeeperSigner(FAKE_SECRET, { auditLog });
+
+    await signer.invokeContract('CCONTRACT', 'liquidate', []);
+
+    expect(fs.existsSync(dir) && fs.readdirSync(dir).length).toBe(0);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

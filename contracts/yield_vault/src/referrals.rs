@@ -39,16 +39,32 @@ impl YieldVault {
         referee: &Address,
         referrer: &Address,
     ) -> Result<(), VaultError> {
+        // Prevent self-referral
         if referee == referrer {
             return Err(VaultError::ZeroAmount);
         }
 
+        // Check for existing referral (no duplicate attribution)
         if env
             .storage()
             .persistent()
             .has(&ReferralKey::Referrer(referee.clone()))
         {
             return Ok(());
+        }
+
+        // Prevent circular referral chains (A→B→A)
+        // Check if referrer was referred by referee (would create cycle)
+        let referrer_upstream: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&ReferralKey::Referrer(referrer.clone()));
+        
+        if let Some(upstream) = referrer_upstream {
+            if upstream == *referee {
+                // Circular reference detected
+                return Err(VaultError::ZeroAmount);
+            }
         }
 
         env.storage()
@@ -176,6 +192,10 @@ impl YieldVault {
     /// Called internally when protocol fees are collected (e.g. during harvest).
     /// The referral reward is a percentage of the protocol fee, NOT the user's
     /// principal.
+    ///
+    /// ## Invariants:
+    /// 1. Referral reward cannot exceed protocol fee
+    /// 2. Total referral rewards cannot exceed sum of individual rewards
     pub fn accrue_referral_reward(env: &Env, referee: &Address, protocol_fee: i128) {
         if protocol_fee <= 0 {
             return;
@@ -202,6 +222,15 @@ impl YieldVault {
             return;
         }
 
+        // INVARIANT: Referral reward cannot exceed protocol fee
+        if reward > protocol_fee {
+            env.events().publish(
+                (symbol_short!("ref_err"),),
+                (referee.clone(), reward, protocol_fee),
+            );
+            return;
+        }
+
         let current_rewards: i128 = env
             .storage()
             .persistent()
@@ -209,7 +238,7 @@ impl YieldVault {
             .unwrap_or(0);
         env.storage().persistent().set(
             &ReferralKey::ReferralRewards(referrer.clone()),
-            &(current_rewards + reward),
+            &(current_rewards.saturating_add(reward)),
         );
 
         let total: i128 = env
@@ -219,7 +248,7 @@ impl YieldVault {
             .unwrap_or(0);
         env.storage()
             .persistent()
-            .set(&ReferralKey::TotalReferralRewards, &(total + reward));
+            .set(&ReferralKey::TotalReferralRewards, &(total.saturating_add(reward)));
 
         env.events().publish(
             (symbol_short!("ref_rew"),),

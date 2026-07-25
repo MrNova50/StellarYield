@@ -143,6 +143,97 @@ describe("GoogleSheetsService", () => {
         ).rejects.toMatchObject({ code: "INSUFFICIENT_SCOPE" });
     });
 
+    // ── previewSync / dry-run mode (#962) ──────────────────────────────────
+
+    describe("previewSync", () => {
+        const validSession = {
+            accessToken: "token",
+            refreshToken: "refresh",
+            expiresAt: Date.now() + 3600000,
+            email: "test@example.com",
+            grantedScopes: ["https://www.googleapis.com/auth/spreadsheets"],
+        };
+        const config = {
+            spreadsheetId: "sheet-123",
+            sheetName: "Yield Metrics",
+            isLinked: true,
+            linkedAt: Date.now(),
+        };
+
+        beforeEach(() => {
+            localStorage.setItem("stellar_yield_google_oauth", JSON.stringify(validSession));
+            localStorage.setItem("stellar_yield_google_sheets", JSON.stringify(config));
+        });
+
+        it("throws when no spreadsheet is linked", async () => {
+            localStorage.removeItem("stellar_yield_google_sheets");
+            await expect(service.previewSync([])).rejects.toThrow("Google Sheets not configured");
+        });
+
+        it("fetches existing rows and returns a dry-run summary", async () => {
+            global.fetch = vi.fn().mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    rows: [
+                        {
+                            walletAddress: "GALICE",
+                            vaultName: "USDC Vault",
+                            asset: "USDC",
+                            timestamp: "2026-05-04",
+                            depositAmount: "1000",
+                            currentValue: "1050",
+                            dailyYield: "5",
+                            apy: "12.34",
+                        },
+                    ],
+                }),
+            });
+
+            const summary = await service.previewSync([
+                {
+                    date: "2026-05-04",
+                    vaultName: "USDC Vault",
+                    depositAmount: 1000n,
+                    currentValue: 1050n,
+                    dailyYield: 5n,
+                    apy: 12.34,
+                    walletAddress: "GALICE",
+                    asset: "USDC",
+                },
+                {
+                    date: "2026-05-05",
+                    vaultName: "USDC Vault",
+                    depositAmount: 1000n,
+                    currentValue: 1075n,
+                    dailyYield: 25n,
+                    apy: 12.4,
+                    walletAddress: "GALICE",
+                    asset: "USDC",
+                },
+            ]);
+
+            expect(global.fetch).toHaveBeenCalledWith(
+                expect.stringContaining("/api/google-sheets/rows?"),
+                expect.objectContaining({
+                    headers: { Authorization: "Bearer token" },
+                }),
+            );
+            expect(summary.skipped).toHaveLength(1);
+            expect(summary.added).toHaveLength(1);
+            expect(summary.totalRows).toBe(2);
+        });
+
+        it("surfaces an API error when reading rows fails", async () => {
+            global.fetch = vi.fn().mockResolvedValueOnce({
+                ok: false,
+                status: 403,
+                json: async () => ({ error: "no access", code: "ACCESS_DENIED" }),
+            });
+
+            await expect(service.previewSync([])).rejects.toMatchObject({ code: "ACCESS_DENIED" });
+        });
+    });
+
     it("should unlink account", () => {
         const config = {
             spreadsheetId: "123",

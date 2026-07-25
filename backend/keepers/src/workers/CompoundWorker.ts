@@ -122,6 +122,8 @@ export class CompoundWorker {
         vaultContractId,
         'harvest',
         [keeperScVal, minAmtXdr],
+        undefined,
+        { workerName: 'CompoundWorker', jobId: job.id, policyVersion: 'v1' },
       );
 
       // Persist submitted state

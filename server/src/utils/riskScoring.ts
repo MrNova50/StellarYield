@@ -102,6 +102,13 @@ export interface RiskResult {
     volatility: number;
     age: number;
   };
+  /** Oracle metadata (if oracle-based pricing is used) */
+  oracleMetadata?: {
+    source: "fresh" | "twap_fallback" | "unavailable";
+    ageSeconds: number | null;
+    confidence: number; // 0-100
+    sampleCount?: number;
+  };
 }
 
 /**
@@ -145,4 +152,47 @@ export function calculateRiskScore(input: RiskInput): RiskResult {
       age: Math.round(age * 100) / 100,
     },
   };
+}
+
+/**
+ * Enhance risk result with oracle metadata for transparency.
+ * 
+ * @param result - Base risk result
+ * @param metadata - Oracle metadata from contract
+ * @returns Enhanced risk result with oracle information
+ */
+export function enhanceWithOracleMetadata(
+  result: RiskResult,
+  metadata: {
+    source: "fresh" | "twap_fallback" | "unavailable";
+    ageSeconds: number | null;
+    confidence: number;
+    sampleCount?: number;
+  }
+): RiskResult {
+  return {
+    ...result,
+    oracleMetadata: metadata,
+  };
+}
+
+/**
+ * Determine if oracle confidence meets minimum threshold for sensitive operations.
+ * 
+ * @param confidence - Oracle confidence score (0-100)
+ * @param operationType - Type of operation being performed
+ * @returns Whether the operation should be allowed
+ */
+export function isOracleConfidenceSufficient(
+  confidence: number,
+  operationType: "deposit" | "withdraw" | "rebalance" | "liquidation"
+): boolean {
+  const thresholds = {
+    deposit: 60,      // Medium confidence acceptable for deposits
+    withdraw: 60,     // Medium confidence acceptable for withdrawals
+    rebalance: 75,    // Higher confidence required for rebalances
+    liquidation: 85,  // Highest confidence required for liquidations
+  };
+
+  return confidence >= thresholds[operationType];
 }

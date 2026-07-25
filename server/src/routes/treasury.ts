@@ -6,9 +6,12 @@ import {
   listScenarios,
   deleteScenario,
   assertValidScenarioInput,
+  previewImport,
   TreasuryValidationError,
   type TreasuryScenario,
   type AllocationPosition,
+  type CashflowRow,
+  type CashflowImportPreview,
 } from "../services/treasurySimulationService";
 
 const router = Router();
@@ -119,6 +122,43 @@ router.delete("/scenarios/:id", (req: Request, res: Response) => {
     return;
   }
   res.status(204).send();
+});
+
+/**
+ * POST /api/treasury/cashflow/preview
+ * Validate an array of cashflow rows before importing.
+ */
+router.post("/cashflow/preview", (req: Request, res: Response) => {
+  const rows = req.body.rows ?? req.body;
+  if (!Array.isArray(rows)) {
+    res.status(400).json({ error: "Request body must contain an array of cashflow rows." });
+    return;
+  }
+  const preview = previewImport(rows);
+  res.json(preview);
+});
+
+/**
+ * POST /api/treasury/cashflow/import
+ * Validate and store cashflow rows for a scenario.
+ * For now this is a stub that delegates to previewImport and returns success.
+ */
+router.post("/cashflow/import", (req: Request, res: Response) => {
+  const { scenarioId, rows } = req.body;
+  if (!scenarioId || !Array.isArray(rows)) {
+    res.status(400).json({ error: "scenarioId and rows array are required." });
+    return;
+  }
+  const preview = previewImport(rows);
+  if (preview.errors.length > 0) {
+    res.status(422).json({
+      error: "Cashflow rows contain validation errors.",
+      preview,
+    });
+    return;
+  }
+  // Future: persist rows to scenarioStore or a separate store
+  res.status(201).json({ imported: preview.validRows.length, preview });
 });
 
 export default router;

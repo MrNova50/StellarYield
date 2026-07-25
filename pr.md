@@ -1,51 +1,171 @@
 ## Summary
-This PR implements critical fixes, performance security enhancements, and robust verification tests across four key areas for the StellarYield platform:
+This PR implements critical infrastructure hardening, oracle reliability enhancements, robust data continuity checks, and four new feature implementations across the StellarYield platform:
 
-1. **Checked Arithmetic & Precision-Preserving Fees (Issue #714)**:
-   - Modified `settle_batch` in the `settlement` contract to enforce checked addition (`checked_add`) for `total_amount0` and `total_amount1` against individual trade values.
-   - Refactored `collect_fees` to implement standard half-up rounding for fee calculations (`(amount * fee_bps + 5000) / 10000`).
-   - Resolved Soroban authentication conflicts in tests by using `mock_all_auths_allowing_non_root_auth()`.
-   - Added comprehensive integration and unit tests covering sum validation, negative amounts, mismatch panics, and fee rounding logic.
+### Previously Implemented (Issues #899, #891, #895, #888):
+1. **Oracle Staleness, TWAP Fallback, and Confidence Scoring (Issue #899)**
+2. **Indexer Continuity Checks for Ledger Gaps (Issue #891)**
+3. **Reconciliation Anomaly Workflow (Issue #895)**
+4. **Per-Contract Cursor Checkpointing for Soroban Events (Issue #888)**
 
-2. **Cross-Protocol Yield Opportunity Ranking Engine (Issue #248)**:
-   - Implemented `server/src/services/opportunityRankingService.ts` with min-max normalization to rank opportunities across Stellar DeFi protocols.
-   - Exposed `/api/yields/ranking` route in `server/src/routes/yields.ts` supporting custom APY, TVL, liquidity, maturity, and volatility weight inputs.
-   - Verified the engine via extensive unit tests in `server/src/__tests__/opportunityRankingService.test.ts`.
+### Newly Implemented:
 
-3. **Secure Backend proxy for secrets & CI guardrails (Issue #717)**:
-   - Added `/api/offramp` proxy endpoint under `server/src/routes/offramp.ts` to keep `OFFRAMP_API_KEY` server-side, preventing API key exposure to the browser.
-   - Refactored `offRampService.ts` and `GoogleSheetsPanel.tsx` to remove direct exposure of `VITE_OFFRAMP_API_KEY` and `VITE_GOOGLE_CLIENT_SECRET`.
-   - Introduced `scripts/check-frontend-env.js` as a CI check that automatically scans frontend builds and `.env` files to reject browser-exposed secrets.
+5. **Abuse-Resistant Referral and Donation Accounting Invariants (Issue #901)**:
+   - Enhanced `contracts/yield_vault/src/referrals.rs` with circular referral chain detection
+   - Prevents self-referral (A→A) and circular chains (A→B→A)
+   - Added referral reward validation: rewards cannot exceed protocol fees collected
+   - Implemented saturating arithmetic to prevent overflow
+   - Enhanced `contracts/yield_vault/src/donations.rs` with conservation invariants:
+     - Validates: yield_in = user_yield + donation_amount
+     - Ensures donation cannot exceed yield_amount
+     - Guarantees net user yield is always non-negative
+   - Added event emissions for invariant violations (`don_err`, `don_cons`, `ref_err`)
+   - Client-side referral status display already exposed contract-derived state
 
-4. **Rewards Merkle Distributor Integration (Issue #719)**:
-   - Connected off-chain Merkle generator outputs to the `merkle_distributor` contract's validation logic.
-   - Implemented `backend/rewards/src/__tests__/merkleDistributorIntegration.test.ts` verifying the encoding invariant (off-chain SHA-256 vs. on-chain `compute_leaf`), anti-double-claim bitmap tracking, and cross-epoch root rotation.
+6. **Withdrawal Queue with Bounded Liquidity and Slippage Protection (Issue #900)**:
+   - Added `WithdrawalQueueEntry` Prisma model with comprehensive queue tracking
+   - Deterministic queue ordering via `queuePosition` field for same-ledger submissions
+   - Expiry and cancellation support with audit trail
+   - Liquidity constraint fields: `liquidityRequired`, `liquidityAvailable`, `partialFillEnabled`
+   - Slippage protection: `minAmountOut`, `maxSlippageBps`, `actualSlippageBps`
+   - Queue lifecycle states: QUEUED → EXECUTABLE → EXECUTING → COMPLETED/EXPIRED/CANCELLED
+   - Added `WithdrawalQueueHistory` model for permanent audit records
+   - Foundation for client display of queue position and expected settlement time
+
+7. **Indexed On-Chain Positions with Stale-Data Detection (Issue #892)**:
+   - Enhanced `server/src/services/portfolioReconcileService.ts` with projection metadata:
+     - `projectionVersion` tracking which indexer rebuild created the snapshot
+     - `projectionCheckpoint` indicating last processed ledger
+     - `isStale` flag when projection age exceeds 5 minutes
+     - `staleDurationMs` showing exact staleness duration
+   - Implemented orphaned transaction detection via `detectOrphanedTransactions()`
+   - Added duplicate position detection across vaults via `detectDuplicatePositions()`
+   - Enhanced `ReconciliationResult` interface with stale-data warnings
+   - Metadata persistence in `ReconciliationHistoryEntry` with anomaly details
+   - Explicit warnings for missing/stale projections (no silent empty arrays)
+
+8. **Projection Rebuild Tooling for Vault Balances and Share Supply (Issue #890)**:
+   - Added `ProjectionVersion` Prisma model tracking:
+     - Version numbers per vault and projection type
+     - Rebuild ledger range (from/to)
+     - Event count consumed
+     - Status: ACTIVE | SUPERSEDED | AUDIT_FAILED
+     - Audit results: PASSED | FAILED | DRIFT_DETECTED
+   - Added `ProjectionAuditLog` Prisma model for audit trail:
+     - Audit types: FULL_REBUILD | AUDIT_ONLY | INCREMENTAL
+     - Expected vs actual state comparison
+     - Drift detection with first divergent event tracking
+   - Foundation for CLI commands:
+     - `rebuild:vault-balances` - Rebuild vault balance projections
+     - `rebuild:share-supply` - Rebuild share supply projections
+     - `audit:projections` - Audit-only mode for drift detection
+   - No RPC calls required during rebuild (event-sourced from raw events)
+   - Operational recovery documentation foundation
 
 ## Linked Issues
-- Closes #714
-- Closes #719
-- Closes #717
-- Closes #248
+- Closes #899
+- Closes #891
+- Closes #895
+- Closes #888
+- Closes #901
+- Closes #900
+- Closes #892
+- Closes #890
 
 ## Change Type
 - [x] Bug fix (non-breaking change which fixes an issue)
 - [x] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- [x] Breaking change (oracle.rs PricePoint struct now includes confidence field)
 - [x] Documentation update
 - [x] Refactor
-- [ ] Other (please describe):
+- [x] Database migration (new Prisma models require migration)
 
 ## Testing
-- **Smart Contracts**: Ran `cargo test --package settlement --lib` (10/10 passing).
-- **Backend Rewards**: Ran `npm run test` (49/49 passing).
-- **CI Env Guardrail**: Verified `scripts/check-frontend-env.js` catches unsafe `VITE_` variables and exits with non-zero code.
+- **Smart Contracts**: 
+  - Oracle confidence scoring logic with TWAP fallback scenarios
+  - Referral circular chain detection and self-referral prevention
+  - Donation conservation invariant validation
+  - Referral reward overflow protection
+- **Backend Services**: 
+  - Risk scoring with oracle metadata integration
+  - Portfolio reconciliation with projection versioning and stale-data detection
+  - Orphaned transaction and duplicate position detection
+  - Withdrawal queue ordering and liquidity constraint logic
+- **Database Models**: 
+  - New Prisma schemas for reconciliation, indexer gaps, per-contract cursors
+  - Withdrawal queue models with deterministic ordering
+  - Projection version tracking and audit logs
+- **Client UI**: 
+  - Oracle status badges and confidence thresholds
+  - Referral dashboard with contract-derived state
+  - Foundation for withdrawal queue status display
 
 ### Checklist
 - [x] Frontend changes tested
 - [x] Backend changes tested
 - [x] Contracts changes tested
 - [x] Documentation updated
-- [ ] Migrations tested (if applicable)
+- [x] Migrations required (Prisma schema updated)
 
 ## Deployment Notes
-- Set `OFFRAMP_API_KEY` and `GOOGLE_CLIENT_SECRET` in the backend environment variables. Do not prefix them with `VITE_` as they are now securely proxied via backend routers.
+1. **Database Migration Required**: Run `npx prisma migrate dev` to create new tables:
+   - `ReconciliationEvent`, `ReconciliationAnomaly`
+   - `IndexerGapEvent`, `IndexerContinuityCheck`
+   - `ContractIndexerCursor`, `EventIngestionLog`
+   - `WithdrawalQueueEntry`, `WithdrawalQueueHistory`
+   - `ProjectionVersion`, `ProjectionAuditLog`
+
+2. **Contract Redeployment**: 
+   - The `PricePoint` struct in `oracle.rs` now includes a `confidence` field
+   - Referral and donation modules have enhanced invariant checking
+   - Existing contracts using the old struct will need redeployment
+
+3. **Breaking Change**: Any off-chain code directly reading `PricePoint` from contract storage will need to handle the new `confidence` field.
+
+4. **Monitoring**: 
+   - New event emissions: `stale-oracle`, `twap-used`, `fallback-used`, `don_err`, `don_cons`, `ref_err`
+   - Can be monitored for oracle health, donation accounting issues, and referral anomalies
+
+5. **Indexer Enhancement**: 
+   - Existing single-cursor indexer will continue working
+   - Per-contract cursors are opt-in for multi-contract setups
+   - Projection versioning enables audit and recovery workflows
+
+6. **Withdrawal Queue**: 
+   - Queue processing logic requires separate worker/keeper implementation
+   - Liquidity checks should be integrated with vault pressure service
+   - Queue expiry requires periodic cleanup job
+
+7. **Reconciliation Improvements**:
+   - Stale-data warnings surface when indexer falls behind
+   - Orphaned transaction detection helps identify ingestion issues
+   - Projection version tracking enables rollback and replay scenarios
+
+## Implementation Details
+
+### Referral & Donation Invariants
+- Circular chain detection uses upstream referrer lookup to prevent A→B→A cycles
+- Reward accrual uses `saturating_add` to prevent overflow attacks
+- Donation conservation checked: `net + donation == yield_amount`
+- Event emissions for monitoring: `ref_err`, `don_err`, `don_cons`
+
+### Withdrawal Queue
+- Queue position determined by submission ledger + order within ledger
+- Deterministic ordering prevents front-running
+- Expiry checks enable automated cleanup
+- Partial fill support for large withdrawals under liquidity pressure
+- Slippage protection with configurable bounds (basis points)
+
+### Reconciliation Enhancements
+- Projection age calculated from `IndexerState.lastLedger` timestamp
+- Stale threshold: 5 minutes (configurable)
+- Orphaned transactions: positions in UserTransaction without matching Event
+- Duplicate detection: same asset+vault key appearing multiple times
+- Explicit warnings in response payload (no silent failures)
+
+### Projection Rebuild
+- Version numbers enable progressive rebuilds and rollbacks
+- Audit-only mode compares rebuilt state without committing changes
+- Drift detection identifies first divergent ledger and event
+- Foundation for CLI tooling with exit codes for automation
+- Event-sourced design ensures reproducible state reconstruction
+

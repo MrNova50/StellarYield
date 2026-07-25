@@ -58,6 +58,19 @@ describe("TxStatusTimeline", () => {
     expect(screen.getByText("Some unexpected connection reset error from the router")).toBeInTheDocument();
   });
 
+  it("renders the recovering phase within a custom step list", () => {
+    const stepsWithRecovery: readonly TxPhase[] = ["polling", "recovering"];
+    render(
+      <TxStatusTimeline
+        steps={stepsWithRecovery}
+        phase="recovering"
+      />
+    );
+
+    expect(screen.getByText("Confirming on network")).toBeInTheDocument();
+    expect(screen.getByText("Recovering transaction status")).toBeInTheDocument();
+  });
+
   it("calls onRetry when retry button is clicked", () => {
     const onRetry = vi.fn();
     render(

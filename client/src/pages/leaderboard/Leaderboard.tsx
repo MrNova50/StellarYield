@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Trophy, Medal, Star, Wallet, AlertCircle, RefreshCw, Users } from "lucide-react";
 import { apiUrl } from "../../lib/api";
+import { useDensity } from "../../context/DensityContext";
 
 interface LeaderboardEntry {
   rank: number;
@@ -14,6 +15,7 @@ const Leaderboard: React.FC = () => {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { densityClass } = useDensity();
 
   const fetchLeaderboard = () => {
     setLoading(true);
@@ -131,7 +133,7 @@ const Leaderboard: React.FC = () => {
         </p>
       </div>
 
-      <div className="glass-panel overflow-hidden border border-white/10 shadow-2xl">
+      <div className={`glass-panel overflow-hidden border border-white/10 shadow-2xl ${densityClass}`}>
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-white/5 text-gray-400 text-xs uppercase tracking-widest font-bold">

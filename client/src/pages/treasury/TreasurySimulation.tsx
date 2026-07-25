@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Vault, TrendingUp, AlertTriangle, Save, RotateCcw, Info } from "lucide-react";
+import { Vault, TrendingUp, AlertTriangle, Save, RotateCcw, Info, Upload, FileText } from "lucide-react";
 import { FeeAssumptionsModal } from "../../components/FeeAssumptionsModal";
 import { apiUrl } from "../../lib/api";
 import { decodeTransactionError } from "../../utils/errorDecoder";
@@ -44,6 +44,103 @@ const TreasurySimulation: React.FC = () => {
   const [isFeeModalOpen, setIsFeeModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // ── Cashflow Import ──────────────────────────────────────────────
+
+  interface CashflowRowError {
+    rowIndex: number;
+    field: string;
+    code: string;
+    message: string;
+  }
+
+  interface CashflowRowWarning {
+    rowIndex: number;
+    field: string;
+    code: string;
+    message: string;
+  }
+
+  interface CashflowImportPreview {
+    validRows: unknown[];
+    errors: CashflowRowError[];
+    warnings: CashflowRowWarning[];
+    summary: {
+      totalRows: number;
+      validCount: number;
+      errorCount: number;
+      warningCount: number;
+      totalInflow: number;
+      totalOutflow: number;
+      netFlow: number;
+    };
+  }
+
+  const [rawJson, setRawJson] = useState("");
+  const [cashflowPreview, setCashflowPreview] = useState<CashflowImportPreview | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importedCount, setImportedCount] = useState(0);
+
+  async function handlePreview() {
+    setImportError("");
+    setCashflowPreview(null);
+    let parsed: unknown[];
+    try {
+      parsed = JSON.parse(rawJson);
+      if (!Array.isArray(parsed)) throw new Error("Top-level value must be an array.");
+    } catch (e) {
+      setImportError("Invalid JSON: " + (e as Error).message);
+      return;
+    }
+    setImportLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/treasury/cashflow/preview"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: parsed }),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        setImportError(body.error ?? "Preview request failed");
+      } else {
+        setCashflowPreview(await res.json());
+      }
+    } catch {
+      setImportError("Network error");
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function handleImport() {
+    if (!cashflowPreview || cashflowPreview.errors.length > 0) return;
+    setImportError("");
+    setImportLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/treasury/cashflow/import"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scenarioId: `${Date.now()}`,
+          rows: cashflowPreview.validRows,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        setImportError(body.error ?? "Import failed");
+      } else {
+        const result = await res.json();
+        setImportedCount((c) => c + result.imported);
+        setCashflowPreview(null);
+        setRawJson("");
+      }
+    } catch {
+      setImportError("Network error");
+    } finally {
+      setImportLoading(false);
+    }
+  }
 
   const totalPct = allocations.reduce((s, a) => s + a.allocationPct, 0);
 
@@ -198,6 +295,117 @@ const TreasurySimulation: React.FC = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Cashflow Import */}
+      <div className="glass-panel p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Upload size={18} className="text-indigo-400" />
+          <h3 className="text-lg font-semibold">Cashflow Import</h3>
+          {importedCount > 0 && (
+            <span className="text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
+              {importedCount} imported
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-500">
+          Paste a JSON array of cashflow rows to preview validation before import.
+          Each row requires: <code className="text-indigo-300">id</code>,{" "}
+          <code className="text-indigo-300">date</code>,{" "}
+          <code className="text-indigo-300">asset</code>,{" "}
+          <code className="text-indigo-300">amount</code>,{" "}
+          <code className="text-indigo-300">direction</code>,{" "}
+          <code className="text-indigo-300">category</code>.
+        </p>
+        <textarea
+          value={rawJson}
+          onChange={(e) => setRawJson(e.target.value)}
+          placeholder={`[\n  { "id": "cf-1", "date": "2025-06-01", "asset": "USDC", "amount": 50000, "direction": "inflow", "category": "interest", "memo": "Q2 yield" }\n]`}
+          className="w-full h-32 bg-black/50 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono"
+        />
+        <div className="flex gap-3">
+          <button
+            onClick={handlePreview}
+            disabled={importLoading || !rawJson.trim()}
+            className="flex-1 bg-white/10 hover:bg-white/20 disabled:opacity-50 text-white font-semibold py-2 rounded-lg flex items-center justify-center gap-2"
+          >
+            <FileText size={16} />
+            {importLoading ? "Loading…" : "Preview"}
+          </button>
+          <button
+            onClick={handleImport}
+            disabled={importLoading || !cashflowPreview || cashflowPreview.errors.length > 0}
+            className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 text-white font-semibold py-2 rounded-lg flex items-center justify-center gap-2"
+          >
+            <Upload size={16} />
+            Import Valid Rows
+          </button>
+        </div>
+
+        {importError && (
+          <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+            <AlertTriangle size={14} className="text-red-400 shrink-0" />
+            <span className="text-sm text-red-300">{importError}</span>
+          </div>
+        )}
+
+        {cashflowPreview && (
+          <div className="space-y-3 border border-white/10 rounded-xl p-4">
+            <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-widest">
+              Preview — {cashflowPreview.summary.totalRows} rows
+            </h4>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+              <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-2 text-center">
+                <p className="text-green-400 font-bold">{cashflowPreview.summary.validCount}</p>
+                <p className="text-gray-500">Valid</p>
+              </div>
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2 text-center">
+                <p className="text-red-400 font-bold">{cashflowPreview.summary.errorCount}</p>
+                <p className="text-gray-500">Errors</p>
+              </div>
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-2 text-center">
+                <p className="text-yellow-400 font-bold">{cashflowPreview.summary.warningCount}</p>
+                <p className="text-gray-500">Warnings</p>
+              </div>
+              <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-2 text-center">
+                <p className="text-indigo-400 font-bold">${cashflowPreview.summary.totalInflow.toLocaleString()}</p>
+                <p className="text-gray-500">Inflow</p>
+              </div>
+              <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-2 text-center">
+                <p className="text-purple-400 font-bold">${cashflowPreview.summary.totalOutflow.toLocaleString()}</p>
+                <p className="text-gray-500">Outflow</p>
+              </div>
+            </div>
+
+            {cashflowPreview.errors.length > 0 && (
+              <div>
+                <h5 className="text-xs font-semibold text-red-400 mb-1">Errors</h5>
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {cashflowPreview.errors.map((e, i) => (
+                    <div key={i} className="flex items-start gap-2 p-2 bg-red-500/5 border border-red-500/10 rounded text-xs">
+                      <AlertTriangle size={12} className="text-red-400 shrink-0 mt-0.5" />
+                      <span className="text-red-300">{e.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {cashflowPreview.warnings.length > 0 && (
+              <div>
+                <h5 className="text-xs font-semibold text-yellow-400 mb-1">Warnings</h5>
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {cashflowPreview.warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2 p-2 bg-yellow-500/5 border border-yellow-500/10 rounded text-xs">
+                      <AlertTriangle size={12} className="text-yellow-400 shrink-0 mt-0.5" />
+                      <span className="text-yellow-300">{w.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {error && (() => {

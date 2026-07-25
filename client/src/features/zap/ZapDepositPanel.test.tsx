@@ -160,6 +160,26 @@ describe("ZapDepositPanel", () => {
         expect(screen.getByText("Stale quote")).toBeInTheDocument();
       });
     });
+
+    it("blocks submission when quote is stale", async () => {
+      const staleQuotedAt = new Date(Date.now() - 120_000).toISOString();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockQuote({ quotedAt: staleQuotedAt }),
+      });
+
+      render(<ZapDepositPanel walletAddress="GABCDEF123" />);
+
+      const input = screen.getByPlaceholderText("0.00");
+      await userEvent.type(input, "100");
+
+      await waitFor(() => {
+        expect(screen.getByText("Deposit blocked")).toBeInTheDocument();
+      });
+
+      const submitBtn = screen.getByRole("button", { name: /zap deposit|deposit/i });
+      expect(submitBtn).toBeDisabled();
+    });
   });
 
   describe("no wallet state", () => {

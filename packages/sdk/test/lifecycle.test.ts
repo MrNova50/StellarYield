@@ -1,20 +1,33 @@
 import { describe, it, expect } from "vitest";
-import { Keypair, TransactionBuilder, Account, Operation, Networks, Asset } from "@stellar/stellar-sdk";
+import { Keypair, TransactionBuilder, Account, Operation, Networks, Asset, SorobanDataBuilder } from "@stellar/stellar-sdk";
 import {
   VaultClient,
   PreparedTransaction,
   SignedTransaction,
   SubmittedTransaction,
+  ConfirmedTransaction,
   ServerKeypairSigner,
   CustomSigner,
   FreighterSigner,
   SpecMismatchError,
   ContractExecutionError,
+  WalletRejectedError,
+  SubmissionTimeoutError,
+  RestoreRequiredError,
   decodeVaultError,
   parseContractError,
+  needsRestore,
+  restoreAndRetry,
   YIELD_VAULT_SPEC_HASH,
   ApiClient,
 } from "../src";
+import {
+  createFakeRpcServer,
+  fakeGetSuccess,
+  fakeGetFailed,
+  fakeGetNotFound,
+  fakeSendPending,
+} from "./fixtures/fakeRpc";
 
 describe("Soroban SDK Bindings & Lifecycle", () => {
   const dummyContractId = "CCW67TSB3SSSBDGRGBXMORAX6P4CBGQLGLKXMFFBVD7OH5VO5BTV6U2M";
@@ -156,6 +169,169 @@ describe("Soroban SDK Bindings & Lifecycle", () => {
       const endpoints = api.getRegisteredEndpoints();
       expect(endpoints.length).toBeGreaterThan(0);
       expect(endpoints.some((e) => e.pathPattern === "/api/yields")).toBe(true);
+    });
+  });
+
+  describe("Full lifecycle: simulate -> sign -> submit -> poll -> confirm", () => {
+    it("resolves a ConfirmedTransaction through a fake RPC, tolerating an initial NOT_FOUND poll", async () => {
+      const unsignedXdr = createUnsignedXdr();
+      const meta = {
+        simulationResult: 250n,
+        footprint: "f",
+        authEntries: [],
+        minResourceFee: "1000",
+        transactionData: "",
+        latestLedger: 1000,
+        validUntilLedger: 1100,
+        contractId: dummyContractId,
+        networkPassphrase: dummyPassphrase,
+        method: "deposit",
+        argsHash: "{}",
+      };
+
+      const prepared = PreparedTransaction.fromXDR<bigint>(unsignedXdr, meta);
+      const signer = new ServerKeypairSigner(sourceKeypair);
+      const signed = await prepared.sign(signer);
+
+      const fakeServer = createFakeRpcServer({
+        send: fakeSendPending("abc123"),
+        pollSequence: [fakeGetNotFound(), fakeGetSuccess(555)],
+      });
+
+      const submitted = await signed.submit(fakeServer as any);
+      expect(submitted.state).toBe("SUBMITTED");
+
+      const confirmed = await submitted.wait({ pollIntervalMs: 1 });
+      expect(confirmed).toBeInstanceOf(ConfirmedTransaction);
+      expect(confirmed.ledger).toBe(555);
+      expect(confirmed.result).toBe(250n);
+    });
+  });
+
+  describe("Rejected-signature flow", () => {
+    it("throws WalletRejectedError with phase 'sign' and retryable true when the wallet rejects", async () => {
+      const unsignedXdr = createUnsignedXdr();
+      const meta = {
+        simulationResult: 1n,
+        footprint: "",
+        authEntries: [],
+        minResourceFee: "100",
+        transactionData: "",
+        latestLedger: 1,
+        validUntilLedger: 100,
+        contractId: dummyContractId,
+        networkPassphrase: dummyPassphrase,
+        method: "deposit",
+        argsHash: "{}",
+      };
+      const prepared = PreparedTransaction.fromXDR<bigint>(unsignedXdr, meta);
+
+      const rejectingSigner = new CustomSigner(sourceKeypair.publicKey(), async () => {
+        throw new Error("User declined the request");
+      });
+
+      await expect(prepared.sign(rejectingSigner)).rejects.toBeInstanceOf(WalletRejectedError);
+      try {
+        await prepared.sign(rejectingSigner);
+        throw new Error("expected rejection");
+      } catch (err) {
+        expect(err).toBeInstanceOf(WalletRejectedError);
+        expect((err as WalletRejectedError).phase).toBe("sign");
+        expect((err as WalletRejectedError).retryable).toBe(true);
+      }
+    });
+  });
+
+  describe("Expired/timeout flow", () => {
+    it("throws SubmissionTimeoutError with retryable=true when the transaction never lands", async () => {
+      const fakeServer = createFakeRpcServer({ pollSequence: [fakeGetNotFound()] });
+      const submitted = SubmittedTransaction.fromHash<bigint>("neverlands", {
+        rpcUrl: dummyRpcUrl,
+        networkPassphrase: dummyPassphrase,
+        rpcServer: fakeServer as any,
+      });
+
+      await expect(
+        submitted.wait({ timeoutMs: 20, pollIntervalMs: 5 })
+      ).rejects.toMatchObject({
+        name: "SubmissionTimeoutError",
+        txHash: "neverlands",
+        phase: "poll",
+        retryable: true,
+      });
+    });
+
+    it("throws a phase='poll' ContractExecutionError when the network reports FAILED", async () => {
+      const fakeServer = createFakeRpcServer({ pollSequence: [fakeGetFailed(999)] });
+      const submitted = SubmittedTransaction.fromHash<bigint>("willfail", {
+        rpcUrl: dummyRpcUrl,
+        networkPassphrase: dummyPassphrase,
+        rpcServer: fakeServer as any,
+      });
+
+      await expect(submitted.wait()).rejects.toMatchObject({
+        phase: "poll",
+        retryable: false,
+      });
+    });
+  });
+
+  describe("Restore path", () => {
+    it("needsRestore() is false for a plain successful simulation", () => {
+      expect(needsRestore({ transactionData: "present" } as any)).toBe(false);
+    });
+
+    it("needsRestore() is true when the simulation carries a restorePreamble", () => {
+      expect(
+        needsRestore({
+          transactionData: "present",
+          restorePreamble: { minResourceFee: "100", transactionData: "needed" },
+        } as any)
+      ).toBe(true);
+    });
+
+    it("restoreAndRetry() builds, signs, submits and confirms a restore-footprint transaction", async () => {
+      const restoreAccount = new Account(sourceKeypair.publicKey(), "100");
+      const fakeServer = createFakeRpcServer({
+        send: fakeSendPending("restoretxhash"),
+        pollSequence: [fakeGetSuccess(777)],
+      });
+
+      const confirmed = await restoreAndRetry({
+        restorePreamble: { minResourceFee: "5000", transactionData: new SorobanDataBuilder() },
+        sourceAccount: restoreAccount,
+        networkPassphrase: dummyPassphrase,
+        signer: new ServerKeypairSigner(sourceKeypair),
+        server: fakeServer as any,
+        contractId: dummyContractId,
+      });
+
+      expect(confirmed).toBeInstanceOf(ConfirmedTransaction);
+      expect(confirmed.ledger).toBe(777);
+    });
+
+    it("VaultClient surfaces RestoreRequiredError (phase='restore', retryable=true) when simulation needs a restore", async () => {
+      const client = new VaultClient({
+        contractId: dummyContractId,
+        networkPassphrase: dummyPassphrase,
+        rpcUrl: dummyRpcUrl,
+      });
+
+      (client as any).generatedClient.deposit = async () => ({
+        simulation: {
+          transactionData: "present",
+          restorePreamble: { minResourceFee: "12345", transactionData: "needed" },
+        },
+      });
+
+      await expect(
+        client.deposit({ from: sourceKeypair.publicKey(), amount: 100n })
+      ).rejects.toMatchObject({
+        name: "RestoreRequiredError",
+        minResourceFee: "12345",
+        phase: "restore",
+        retryable: true,
+      });
     });
   });
 });

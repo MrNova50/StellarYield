@@ -1,7 +1,9 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
+import crypto from "crypto";
 import { slippageRegistry } from "./slippageRegistry";
 import { getYieldData } from "./yieldService";
 import { freezeService } from "./freezeService";
+import { getZapSupportedAssetsPayload } from "../config/zapAssetsConfig";
 
 export interface ZapQuoteBody {
   inputTokenContract: string;
@@ -23,6 +25,10 @@ export interface ZapQuoteResult {
   minAmountOutStroops: string;
   quoteAgeMs: number;
   isFallback: boolean;
+  issuedAt: string;
+  expiresAt: string;
+  routeHash: string;
+  assetConfigVersion: string;
 }
 
 const rpcUrl = process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
@@ -37,9 +43,20 @@ function mulDivStroops(amountIn: string, numerator: string, denominator: string)
   return ((a * n) / d).toString();
 }
 
+export function getAssetConfigVersion(): string {
+  const payload = getZapSupportedAssetsPayload();
+  const data = JSON.stringify(payload);
+  return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+export function computeRouteHash(path: { contractId: string }[]): string {
+  const ids = path.map(p => p.contractId).join("->");
+  return crypto.createHash("sha256").update(ids).digest("hex");
+}
+
 export async function quoteViaRouterSimulation(
   body: ZapQuoteBody,
-): Promise<ZapQuoteResult | null> {
+): Promise<Omit<ZapQuoteResult, "issuedAt" | "expiresAt" | "routeHash" | "assetConfigVersion"> | null> {
   const routerId = process.env.DEX_ROUTER_CONTRACT_ID;
   const simSource = process.env.ZAP_QUOTE_SIM_SOURCE_ACCOUNT;
   if (!routerId || !simSource) {
@@ -113,7 +130,7 @@ export async function quoteViaRouterSimulation(
   }
 }
 
-export function quoteFallback(body: ZapQuoteBody): ZapQuoteResult {
+export function quoteFallback(body: ZapQuoteBody): Omit<ZapQuoteResult, "issuedAt" | "expiresAt" | "routeHash" | "assetConfigVersion"> {
   const amountIn = body.amountInStroops;
   const now = Date.now();
 
@@ -183,6 +200,11 @@ export async function getZapQuote(body: ZapQuoteBody): Promise<ZapQuoteResult> {
   const now = Date.now();
   const quotedAtMs = new Date(quotedAt).getTime();
 
+  const routeHash = computeRouteHash(sim.path);
+  const assetConfigVersion = getAssetConfigVersion();
+  const issuedAt = quotedAt;
+  const expiresAt = new Date(quotedAtMs + 60 * 1000).toISOString();
+
   return {
     ...sim,
     slippageApplied: effectiveSlippage,
@@ -191,5 +213,42 @@ export async function getZapQuote(body: ZapQuoteBody): Promise<ZapQuoteResult> {
     quotedAt,
     quoteAgeMs: now - quotedAtMs,
     isFallback: sim.source === "fallback_rate",
+    issuedAt,
+    expiresAt,
+    routeHash,
+    assetConfigVersion,
   };
+}
+
+export function verifyZapQuote(quote: any): { valid: boolean; reason?: string; errorCode?: string } {
+  const now = Date.now();
+  if (!quote || typeof quote !== "object") {
+    return { valid: false, reason: "Invalid quote format", errorCode: "INVALID_QUOTE" };
+  }
+  if (!quote.expiresAt || new Date(quote.expiresAt).getTime() < now) {
+    return { valid: false, reason: "Quote has expired", errorCode: "STALE_QUOTE" };
+  }
+  const currentVersion = getAssetConfigVersion();
+  if (quote.assetConfigVersion !== currentVersion) {
+    return { valid: false, reason: "Asset configuration has drifted", errorCode: "CONFIG_DRIFT" };
+  }
+  if (!quote.path || !Array.isArray(quote.path)) {
+    return { valid: false, reason: "Invalid path in quote", errorCode: "ROUTE_MISMATCH" };
+  }
+  const currentRouteHash = computeRouteHash(quote.path);
+  if (quote.routeHash !== currentRouteHash) {
+    return { valid: false, reason: "Route path mismatch", errorCode: "ROUTE_MISMATCH" };
+  }
+  // Check unsupported asset transitions
+  const payload = getZapSupportedAssetsPayload();
+  const supportedIds = new Set([
+    ...payload.assets.map(a => a.contractId),
+    payload.vaultToken.contractId
+  ]);
+  for (const hop of quote.path) {
+    if (!supportedIds.has(hop.contractId)) {
+      return { valid: false, reason: `Asset ${hop.contractId} is no longer supported`, errorCode: "ROUTE_MISMATCH" };
+    }
+  }
+  return { valid: true };
 }
