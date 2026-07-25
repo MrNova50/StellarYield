@@ -1,6 +1,6 @@
-import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Ban } from "lucide-react";
 import { useDepositImpact } from "./useDepositImpact";
-import type { ImpactSeverity } from "./useDepositImpact";
+import type { ImpactSeverity, QuoteSnapshot } from "./useDepositImpact";
 
 export interface DepositRouteMaterialImpactWarningProps {
   amountUsd: number;
@@ -9,6 +9,9 @@ export interface DepositRouteMaterialImpactWarningProps {
   isStale: boolean;
   executionQualityScore?: number;
   materialImpact?: boolean;
+  quote?: QuoteSnapshot;
+  routeImpactThreshold?: number;
+  blockStaleQuotes?: boolean;
 }
 
 const SEVERITY_STYLES: Record<
@@ -38,6 +41,9 @@ export default function DepositRouteMaterialImpactWarning({
   isStale,
   executionQualityScore,
   materialImpact,
+  quote,
+  routeImpactThreshold,
+  blockStaleQuotes,
 }: DepositRouteMaterialImpactWarningProps) {
   const impact = useDepositImpact({
     amountUsd,
@@ -46,9 +52,28 @@ export default function DepositRouteMaterialImpactWarning({
     isStale,
     executionQualityScore,
     materialImpact,
+    quote,
+    routeImpactThreshold,
+    blockStaleQuotes,
   });
 
-  if (impact.severity === "none") return null;
+  if (impact.severity === "none" && !impact.shouldBlock) return null;
+
+  if (impact.shouldBlock) {
+    return (
+      <div
+        className="flex items-start gap-2 p-3 rounded-lg border bg-red-500/10 border-red-500/30"
+        role="alert"
+        aria-live="assertive"
+      >
+        <Ban className="w-4 h-4 shrink-0 mt-0.5 text-red-300" />
+        <div>
+          <p className="text-sm font-medium text-red-300">Deposit blocked</p>
+          <p className="mt-1 text-xs text-red-200/70">{impact.blockReason}</p>
+        </div>
+      </div>
+    );
+  }
 
   const styles = SEVERITY_STYLES[impact.severity];
   const Icon = impact.severity === "critical" ? ShieldAlert : AlertTriangle;
@@ -57,6 +82,7 @@ export default function DepositRouteMaterialImpactWarning({
     <div
       className={`flex items-start gap-2 p-3 rounded-lg border ${styles.bg} ${styles.border}`}
       role="alert"
+      aria-live="polite"
     >
       <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${styles.titleColor}`} />
       <div>

@@ -3,6 +3,8 @@ import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import type {
   ConnectWalletOptions,
   ExtensionWalletProviderId,
+  SessionPermission,
+  SessionOrigin,
   VerificationStatus,
   WalletProviderId,
   WalletSession,
@@ -11,6 +13,53 @@ import { getAdapter } from "./walletAdapters";
 import { getApiBaseUrl } from "../lib/api";
 
 const STORAGE_KEY = "stellar-yield.wallet-session";
+const BROADCAST_CHANNEL_NAME = "stellar-yield-wallet-session";
+
+export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+export const STALE_THRESHOLD_MS = 30 * 60 * 1000;
+
+const DEFAULT_PERMISSIONS: SessionPermission[] = ["read", "sign"];
+
+let broadcastChannel: BroadcastChannel | null = null;
+
+function getBroadcastChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === "undefined") return null;
+  if (!broadcastChannel) {
+    broadcastChannel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+  }
+  return broadcastChannel;
+}
+
+export function broadcastSessionEvent(event: {
+  type: "disconnect" | "account-change" | "session-update";
+  payload?: WalletSession | null;
+}) {
+  const channel = getBroadcastChannel();
+  channel?.postMessage(event);
+}
+
+export function onSessionEvent(
+  handler: (event: { type: string; payload?: WalletSession | null }) => void,
+): () => void {
+  const channel = getBroadcastChannel();
+  if (!channel) return () => {};
+
+  const listener = (e: MessageEvent) => handler(e.data);
+  channel.addEventListener("message", listener);
+  return () => channel.removeEventListener("message", listener);
+}
+
+function generateTabId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createSessionOrigin(): SessionOrigin {
+  return {
+    tabId: generateTabId(),
+    origin: typeof window !== "undefined" ? window.location.origin : "unknown",
+    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+  };
+}
 
 
 interface ChallengeResponse {
@@ -41,7 +90,8 @@ export function loadStoredSession(): WalletSession | null {
   }
 
   try {
-    return JSON.parse(stored) as WalletSession;
+    const session = JSON.parse(stored) as WalletSession;
+    return session;
   } catch (error) {
     console.error("Failed to restore wallet session", error);
     window.localStorage.removeItem(STORAGE_KEY);
@@ -49,12 +99,26 @@ export function loadStoredSession(): WalletSession | null {
   }
 }
 
+export function isSessionExpired(session: WalletSession): boolean {
+  if (!session.connectedAt) return false;
+  const age = Date.now() - new Date(session.connectedAt).getTime();
+  return age > SESSION_TTL_MS;
+}
+
+export function isSessionStale(session: WalletSession): boolean {
+  if (!session.lastActivityAt) return true;
+  const idle = Date.now() - new Date(session.lastActivityAt).getTime();
+  return idle > STALE_THRESHOLD_MS;
+}
+
 export function clearStoredSession() {
   window.localStorage.removeItem(STORAGE_KEY);
+  broadcastSessionEvent({ type: "disconnect", payload: null });
 }
 
 function saveSession(session: WalletSession) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  broadcastSessionEvent({ type: "session-update", payload: session });
 }
 
 function getProviderLabel(providerId: WalletProviderId) {
@@ -154,6 +218,7 @@ export async function connectWalletSession(
   options: ConnectWalletOptions = {},
 ): Promise<WalletSession> {
   const providerId = options.providerId ?? "freighter";
+  const origin = createSessionOrigin();
 
   // ── Extension / browser wallet providers ───────────────────────────
   const EXTENSION_PROVIDERS: ExtensionWalletProviderId[] = ["freighter", "xbull", "albedo"];
@@ -162,6 +227,20 @@ export async function connectWalletSession(
     if (!adapter) {
       throw new Error(`No adapter found for wallet provider: ${providerId}`);
     }
+
+    let providerAvailable = true;
+    try {
+      providerAvailable = await adapter.isAvailable();
+    } catch {
+      providerAvailable = false;
+    }
+    if (!providerAvailable) {
+      throw new Error(
+        `${getProviderLabel(providerId)} extension is not available. ` +
+        `Install it or check if it was disconnected from another tab.`,
+      );
+    }
+
     const walletAddress = await adapter.getPublicKey();
     const session: WalletSession = {
       walletAddress,
@@ -171,6 +250,10 @@ export async function connectWalletSession(
       verificationStatus: "verified",
       connectedAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
+      lastVerifiedAt: new Date().toISOString(),
+      permissions: [...DEFAULT_PERMISSIONS, "trade"],
+      origin,
+      providerAvailable: true,
     };
     saveSession(session);
     return session;
@@ -193,9 +276,15 @@ export async function connectWalletSession(
     verificationStatus: "degraded",
     connectedAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString(),
+    permissions: [...DEFAULT_PERMISSIONS],
+    origin,
+    providerAvailable: true,
   };
 
   session.verificationStatus = await verifySmartWalletSession(session);
+  if (session.verificationStatus === "verified") {
+    session.lastVerifiedAt = new Date().toISOString();
+  }
   saveSession(session);
   return session;
 }
