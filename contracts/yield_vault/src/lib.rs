@@ -6,6 +6,40 @@
 //! Accepts user deposits of SAC tokens (XLM, USDC, etc.), tracks ownership
 //! via LP-style vault shares, and exposes an admin-gated `rebalance`
 //! function for moving funds across liquidity pools.
+//!
+//! # Precision & Rounding Assumptions
+//!
+//! All accounting uses `i128` integer math. No floating-point types are used
+//! for value calculations. The following rounding conventions apply:
+//!
+//! | Operation | Rounding Direction | Rationale |
+//! |---|---|---|
+//! | `preview_deposit` (shares minted) | Ceil division `(n + d - 1) / d` | User-favorable: prevents share inflation from rounding |
+//! | `preview_withdraw` (assets returned) | Floor division | Protocol-favorable: ensures solvency |
+//! | `preview_redeem` (shares needed) | Ceil division `(n + d - 1) / d` | User-favorable: prevents overcharging shares |
+//! | `convert_to_shares` | Ceil division `(n + d - 1) / d` | User-favorable: matches preview_deposit |
+//! | `convert_to_assets` | Floor division | Protocol-favorable: matches preview_withdraw |
+//! | `apply_performance_fee` | Floor division for fee | User-favorable: fee rounds down |
+//! | `compute_moving_avg_apy` | Floor division | Acceptable for fee bracket selection |
+//! | `emergency_withdraw` penalty | Floor division for cut | User-favorable: penalty rounds down |
+//!
+//! ## Dust Bounds
+//! - Share conversion rounding dust: at most 1 wei per operation.
+//! - Fee rounding dust: at most 1 unit of the smallest token denomination.
+//! - No value is ever created or destroyed beyond documented rounding dust.
+//!
+//! ## Decimal Handling
+//! - All token amounts are in the native token's smallest unit (e.g., 7-decimal
+//!   for XLM, 6-decimal for USDC). No decimal scaling is applied within the vault.
+//! - Share price is stored as a fixed-point integer with 18 decimal places
+//!   (1e18 precision) for internal calculations.
+//! - Basis points (bps) are integers in range [0, 10000].
+//!
+//! ## Invariant Guarantees
+//! - `total_assets == sum(user_shares * share_price)` within rounding tolerance.
+//! - `net_amount + fee_amount == gross_amount` for all fee applications.
+//! - `total_shares * share_price ≈ total_assets` with at most 1 unit rounding.
+//! - No operation can create or destroy value beyond documented rounding dust.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address, Bytes,
