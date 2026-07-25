@@ -37,6 +37,10 @@ enum DataKey {
     Oracle,
     // Emergency settings
     EmergencyPenaltyBps, // optional haircut on withdrawals during emergency
+    // Replay protection for admin operations (#902)
+    ExecutedAdminOp(Bytes), // Hash of (network, contract, operation, nonce)
+    // Cross-contract allowlist with network binding (#905)
+    AllowedContractRole(Symbol), // Role -> Address allowlist (e.g., "zap" -> ZapContract)
 }
 
 mod admin;
@@ -49,6 +53,7 @@ mod keeper;
 mod oracle;
 mod referrals;
 mod verification;
+pub mod events; // Versioned event schemas (#904)
 
 // ── Errors ──────────────────────────────────────────────────────────────
 
@@ -72,6 +77,12 @@ pub enum VaultError {
     InvalidDonationBps = 2001,
     /// Charity address is not on the protocol whitelist (maps to error code 2002).
     CharityNotWhitelisted = 2002,
+    /// Admin operation has expired (maps to error code 2003).
+    OperationExpired = 2003,
+    /// Admin operation was already executed (replay attempt) (maps to error code 2004).
+    OperationReplayed = 2004,
+    /// Cross-contract call from unauthorized or wrong-network contract (maps to error code 2005).
+    UnauthorizedContract = 2005,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────
