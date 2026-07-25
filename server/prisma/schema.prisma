@@ -318,3 +318,145 @@ model PortfolioRegimeShiftAlert {
   @@index([walletAddress, createdAt])
   @@index([walletAddress, currentRegime, createdAt])
 }
+
+// ── Reconciliation Anomaly Models (Issue #895) ──────────────────────────────
+
+model ReconciliationEvent {
+  id              String   @id @default(uuid())
+  walletAddress   String
+  vaultId         String?
+  status          String   // success | partial | failed
+  changeCount     Int      @default(0)
+  mismatchCount   Int      @default(0)
+  error           String?
+  triggeredBy     String?  // MANUAL | AUTO | SCHEDULED
+  acknowledgedAt  DateTime?
+  acknowledgedBy  String?
+  resolvedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  anomalies       ReconciliationAnomaly[]
+
+  @@index([walletAddress, createdAt])
+  @@index([status, createdAt])
+  @@index([vaultId, createdAt])
+}
+
+model ReconciliationAnomaly {
+  id              String   @id @default(uuid())
+  eventId         String
+  event           ReconciliationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  assetId         String
+  accountId       String?
+  ledgerWindow    String?  // Ledger range where anomaly occurred
+  anomalyType     String   // ORPHANED | DUPLICATE | MISSING | DISCREPANCY
+  severity        String   // warning | critical
+  
+  chainValue      Float?
+  cachedValue     Float?
+  discrepancy     Float?
+  
+  remediation     String?  // Suggested fix
+  remediationApplied Boolean @default(false)
+  remediationDetails Json?
+  
+  resolvedAt      DateTime?
+  resolvedBy      String?
+  resolutionNotes String?
+  
+  createdAt       DateTime @default(now())
+
+  @@index([eventId, severity])
+  @@index([anomalyType, severity, resolvedAt])
+  @@index([assetId, createdAt])
+}
+
+// ── Indexer Continuity Models (Issue #891) ──────────────────────────────────
+
+model IndexerGapEvent {
+  id              String   @id @default(uuid())
+  contractId      String?
+  gapType         String   // LEDGER_SKIP | ROLLBACK | REGRESSION | NETWORK_DRIFT
+  severity        String   // INFO | WARNING | CRITICAL
+  
+  fromLedger      Int
+  toLedger        Int
+  gapSize         Int
+  
+  detectedAt      DateTime @default(now())
+  recoveredAt     DateTime?
+  recoveryStatus  String   @default("PENDING") // PENDING | IN_PROGRESS | RECOVERED | UNRECOVERABLE
+  recoveryAttempts Int     @default(0)
+  
+  errorMessage    String?
+  context         Json?    // Additional context about the gap
+  
+  @@index([contractId, detectedAt])
+  @@index([recoveryStatus, detectedAt])
+  @@index([gapType, severity])
+}
+
+model IndexerContinuityCheck {
+  id              String   @id @default(uuid())
+  networkPassphrase String
+  contractDeploymentLedger Int
+  expectedContractId String
+  actualContractId String?
+  
+  status          String   // VALID | INVALID | MISMATCH
+  checkType       String   // NETWORK_VALIDATION | CONTRACT_VALIDATION | LEDGER_CONTINUITY
+  
+  errorMessage    String?
+  checkedAt       DateTime @default(now())
+  
+  @@index([status, checkedAt])
+  @@index([checkType, checkedAt])
+}
+
+// ── Per-Contract Cursor Models (Issue #888) ─────────────────────────────────
+
+model ContractIndexerCursor {
+  id              String   @id @default(uuid())
+  contractId      String   @unique
+  networkId       String   // testnet | mainnet | futurenet
+  streamType      String   @default("events") // events | diagnostics | transactions
+  
+  lastLedger      Int
+  lastTxHash      String?
+  lastProcessedAt DateTime @default(now())
+  
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | ERROR
+  errorCount      Int      @default(0)
+  lastError       String?
+  lastErrorAt     DateTime?
+  
+  checkpointAge   Int?     // Seconds since last checkpoint
+  cursorPosition  String?  // RPC pagination cursor
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([contractId, networkId, streamType])
+  @@index([status, lastProcessedAt])
+  @@index([networkId, lastLedger])
+}
+
+model EventIngestionLog {
+  id              String   @id @default(uuid())
+  contractId      String
+  ledger          Int
+  txHash          String
+  eventIdentity   String   // Unique event identity for idempotency
+  
+  rawXdr          String?  // Raw XDR data
+  topics          Json     // Parsed topics
+  decoderVersion  String   // Version of decoder used
+  
+  ingestedAt      DateTime @default(now())
+  replayedFrom    String?  // If replayed, which checkpoint
+  
+  @@unique([eventIdentity]) // Ensure idempotency
+  @@index([contractId, ledger])
+  @@index([txHash])
+}

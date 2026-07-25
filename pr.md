@@ -1,51 +1,76 @@
 ## Summary
-This PR implements critical fixes, performance security enhancements, and robust verification tests across four key areas for the StellarYield platform:
+This PR implements critical infrastructure hardening, oracle reliability enhancements, and robust data continuity checks across four key areas for the StellarYield platform:
 
-1. **Checked Arithmetic & Precision-Preserving Fees (Issue #714)**:
-   - Modified `settle_batch` in the `settlement` contract to enforce checked addition (`checked_add`) for `total_amount0` and `total_amount1` against individual trade values.
-   - Refactored `collect_fees` to implement standard half-up rounding for fee calculations (`(amount * fee_bps + 5000) / 10000`).
-   - Resolved Soroban authentication conflicts in tests by using `mock_all_auths_allowing_non_root_auth()`.
-   - Added comprehensive integration and unit tests covering sum validation, negative amounts, mismatch panics, and fee rounding logic.
+1. **Oracle Staleness, TWAP Fallback, and Confidence Scoring (Issue #899)**:
+   - Enhanced `contracts/yield_vault/src/oracle.rs` with confidence scoring (0-100 scale) based on price age and sample quality.
+   - Implemented `get_secure_price_with_metadata()` returning price, confidence score, and fallback status.
+   - Added minimum 2-sample requirement for TWAP calculation with volatility-based confidence penalties.
+   - Emits `stale-oracle` and `twap-used` events for observability.
+   - Exposed oracle metadata (source, age, confidence, samples) in `server/src/utils/riskScoring.ts`.
+   - Added client-side oracle status UI configuration in `client/src/config/riskConfig.ts`.
+   - Blocks sensitive operations (rebalances, liquidations) when confidence falls below 50%.
 
-2. **Cross-Protocol Yield Opportunity Ranking Engine (Issue #248)**:
-   - Implemented `server/src/services/opportunityRankingService.ts` with min-max normalization to rank opportunities across Stellar DeFi protocols.
-   - Exposed `/api/yields/ranking` route in `server/src/routes/yields.ts` supporting custom APY, TVL, liquidity, maturity, and volatility weight inputs.
-   - Verified the engine via extensive unit tests in `server/src/__tests__/opportunityRankingService.test.ts`.
+2. **Indexer Continuity Checks for Ledger Gaps (Issue #891)**:
+   - Added `IndexerGapEvent` and `IndexerContinuityCheck` Prisma models for tracking ledger gaps, rollbacks, and network drift.
+   - Implemented gap detection with severity classification (INFO, WARNING, CRITICAL).
+   - Added recovery tracking with automatic retry mechanism and status monitoring (PENDING, IN_PROGRESS, RECOVERED, UNRECOVERABLE).
+   - Network passphrase validation to prevent wrong-network contract ingestion.
+   - Persistent error history surviving server restarts.
+   - Enhanced indexer status endpoint with continuity metrics.
 
-3. **Secure Backend proxy for secrets & CI guardrails (Issue #717)**:
-   - Added `/api/offramp` proxy endpoint under `server/src/routes/offramp.ts` to keep `OFFRAMP_API_KEY` server-side, preventing API key exposure to the browser.
-   - Refactored `offRampService.ts` and `GoogleSheetsPanel.tsx` to remove direct exposure of `VITE_OFFRAMP_API_KEY` and `VITE_GOOGLE_CLIENT_SECRET`.
-   - Introduced `scripts/check-frontend-env.js` as a CI check that automatically scans frontend builds and `.env` files to reject browser-exposed secrets.
+3. **Reconciliation Anomaly Workflow (Issue #895)**:
+   - Added `ReconciliationEvent` and `ReconciliationAnomaly` Prisma models for durable anomaly tracking.
+   - Implemented four anomaly types: ORPHANED, DUPLICATE, MISSING, DISCREPANCY.
+   - Severity-based workflow with suggested remediation and resolution tracking.
+   - Operator acknowledgment and resolution audit trail.
+   - Anomaly grouping by account, vault, and ledger window.
+   - Foundation for UI drill-down and automated remediation rules.
 
-4. **Rewards Merkle Distributor Integration (Issue #719)**:
-   - Connected off-chain Merkle generator outputs to the `merkle_distributor` contract's validation logic.
-   - Implemented `backend/rewards/src/__tests__/merkleDistributorIntegration.test.ts` verifying the encoding invariant (off-chain SHA-256 vs. on-chain `compute_leaf`), anti-double-claim bitmap tracking, and cross-epoch root rotation.
+4. **Per-Contract Cursor Checkpointing for Soroban Events (Issue #888)**:
+   - Added `ContractIndexerCursor` and `EventIngestionLog` Prisma models.
+   - Implemented per-contract, per-network, per-stream-type cursor tracking.
+   - Event identity-based idempotency preventing duplicate ingestion of legitimate duplicate events.
+   - Raw XDR storage with decoder version tracking for replay compatibility.
+   - Checkpoint age monitoring and per-contract error isolation.
+   - Foundation for multi-contract parallel indexing.
 
 ## Linked Issues
-- Closes #714
-- Closes #719
-- Closes #717
-- Closes #248
+- Closes #899
+- Closes #891
+- Closes #895
+- Closes #888
 
 ## Change Type
 - [x] Bug fix (non-breaking change which fixes an issue)
 - [x] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- [x] Breaking change (oracle.rs PricePoint struct now includes confidence field)
 - [x] Documentation update
 - [x] Refactor
-- [ ] Other (please describe):
+- [x] Database migration (new Prisma models require migration)
 
 ## Testing
-- **Smart Contracts**: Ran `cargo test --package settlement --lib` (10/10 passing).
-- **Backend Rewards**: Ran `npm run test` (49/49 passing).
-- **CI Env Guardrail**: Verified `scripts/check-frontend-env.js` catches unsafe `VITE_` variables and exits with non-zero code.
+- **Smart Contracts**: Oracle confidence scoring logic with TWAP fallback scenarios.
+- **Backend Services**: Risk scoring with oracle metadata integration.
+- **Database Models**: New Prisma schemas for reconciliation, indexer gaps, and per-contract cursors.
+- **Client UI**: Oracle status badges and confidence thresholds.
 
 ### Checklist
 - [x] Frontend changes tested
 - [x] Backend changes tested
 - [x] Contracts changes tested
 - [x] Documentation updated
-- [ ] Migrations tested (if applicable)
+- [x] Migrations required (Prisma schema updated)
 
 ## Deployment Notes
-- Set `OFFRAMP_API_KEY` and `GOOGLE_CLIENT_SECRET` in the backend environment variables. Do not prefix them with `VITE_` as they are now securely proxied via backend routers.
+1. **Database Migration Required**: Run `npx prisma migrate dev` to create new tables:
+   - `ReconciliationEvent`, `ReconciliationAnomaly`
+   - `IndexerGapEvent`, `IndexerContinuityCheck`
+   - `ContractIndexerCursor`, `EventIngestionLog`
+
+2. **Contract Redeployment**: The `PricePoint` struct in `oracle.rs` now includes a `confidence` field. Existing contracts using the old struct will need redeployment.
+
+3. **Breaking Change**: Any off-chain code directly reading `PricePoint` from contract storage will need to handle the new `confidence` field.
+
+4. **Monitoring**: New event emissions (`stale-oracle`, `twap-used`, `fallback-used`) can be monitored for oracle health tracking.
+
+5. **Indexer Enhancement**: Existing single-cursor indexer will continue working. Per-contract cursors are opt-in for multi-contract setups.
