@@ -153,7 +153,10 @@ impl YieldVault {
             return 0;
         }
         
-        let sum: i128 = prices.iter().sum();
+        let mut sum: i128 = 0;
+        for price in prices.iter() {
+            sum += price;
+        }
         let avg = sum / prices.len() as i128;
         
         let mut max_deviation = 0i128;

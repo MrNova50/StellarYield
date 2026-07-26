@@ -6,7 +6,7 @@ import { decodeTransactionError } from "../../utils/errorDecoder";
 import { zapDeposit } from "../../services/soroban";
 import type { TxPhase } from "../../services/transactionPhase";
 import { TX_PHASE_PIPELINE } from "../../services/transactionPhase";
-import { fetchSwapQuote } from "./fetchSwapQuote";
+import { fetchSwapQuote, verifySwapQuote } from "./fetchSwapQuote";
 import { minAmountAfterSlippage } from "./slippage";
 import { parseDecimalToStroops, formatStroopsToDecimal } from "./amount";
 import {
@@ -236,6 +236,14 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     setError("");
     setShowFailedModal(false);
     try {
+      if (quoteData) {
+        const isValid = await verifySwapQuote(quoteData);
+        if (!isValid) {
+          setError('Quote validation failed. Please refresh and try again.');
+          setShowFailedModal(true);
+          return;
+        }
+      }
       const result = await zapDeposit(
         walletAddress,
         {

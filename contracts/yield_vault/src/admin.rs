@@ -3,6 +3,10 @@ use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{symbol_short, Address, Env, IntoVal, Val, Vec};
 
 impl YieldVault {
+    /// Note: `emergency_pause` and `emergency_unpause` have moved to emergency.rs.
+    /// They now support guardian authority, bounded durations, automatic expiry,
+    /// and governance oversight. Use `YieldVault::emergency_pause(env, caller, duration)`
+    /// and `YieldVault::emergency_unpause(env, caller)` instead.
     /// Immediately pause all vault operations (deposit, withdraw, rebalance).
     /// Callable only by admin.
     pub fn emergency_pause(env: Env, admin: Address) -> Result<(), VaultError> {
@@ -122,12 +126,40 @@ impl YieldVault {
     }
 
     /// View function to check if the vault is currently paused.
+    /// Delegates to emergency.rs implementation which handles automatic expiry
+    /// and guardian-based pause state.
     pub fn is_paused(env: &Env) -> bool {
-        env.storage()
+        // Check legacy pause flag (DataKey::Paused) for backward compatibility
+        // and delegate to emergency.rs for the new timelocked pause system.
+        // The emergency module's is_paused handles automatic expiry.
+        let legacy_paused: bool = env
+            .storage()
             .instance()
             .get(&DataKey::Paused)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if legacy_paused {
+            return true;
+        }
+        // Check emergency module pause state (handles automatic expiry)
+        let pause_start: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseStart);
+        let pause_duration: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseDuration);
+        match (pause_start, pause_duration) {
+            (Some(start), Some(duration)) => {
+                let now = env.ledger().timestamp();
+                let elapsed = now.saturating_sub(start);
+                if elapsed >= duration {
+                    // Pause has expired - auto-cleanup
+                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseStart);
+                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseDuration);
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        }
     }
+}
 
     // ── Replay Protection for Admin Operations (#902) ───────────────────
     /// Verify and consume an admin operation intent with domain separation.
