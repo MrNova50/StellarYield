@@ -19,9 +19,16 @@ export type {
 export {
   calculateRewards,
   generateWeeklyDistribution,
+  generateWeeklyDistributionWithManifest,
   getUserProof,
+  buildArtifactManifest,
+  validateArtifactManifest,
 } from "./generateTree";
-export type { UserRewardInput } from "./generateTree";
+export type {
+  UserRewardInput,
+  RewardArtifactManifest,
+  GenerateManifestOptions,
+} from "./generateTree";
 
 export {
   summarizeRewardScheduleHealth,
