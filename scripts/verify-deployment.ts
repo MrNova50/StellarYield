@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import semver from 'semver';
+import { validateContractAddresses, DEPLOYMENT_CONTRACT_ROLES } from './validateContractAddresses';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
@@ -227,6 +228,14 @@ printSection('Node.js Version');
 const nodeCheck = checkNodeVersion();
 console.log(`  ${nodeCheck.ok ? '✓' : '✗'} ${nodeCheck.message}`);
 
+printSection('Contract Address Sanity Checks');
+const contractAddressIssues = validateContractAddresses(process.env, DEPLOYMENT_CONTRACT_ROLES);
+if (contractAddressIssues.length === 0) {
+  console.log('  ✓ All configured contract addresses are well-formed and unique per role');
+} else {
+  contractAddressIssues.forEach((issue) => console.log(`  ✗ [${issue.code}] ${issue.message}`));
+}
+
 printSection('Vercel Config');
 const vercelCheck = checkVercelConfig();
 if (!vercelCheck.found) {
@@ -245,9 +254,10 @@ const allResults = [...frontendResults, ...backendResults];
 const missingRequired = allResults.filter((r) => r.status === 'missing' && r.required);
 const nodeOk = nodeCheck.ok;
 const vercelOk = vercelCheck.ok;
+const contractAddressesOk = contractAddressIssues.length === 0;
 
 console.log('\n' + '═'.repeat(60));
-if (missingRequired.length === 0 && nodeOk && vercelOk) {
+if (missingRequired.length === 0 && nodeOk && vercelOk && contractAddressesOk) {
   console.log('DEPLOYMENT CHECK: ALL PASSED');
   process.exit(0);
 } else {
@@ -257,5 +267,8 @@ if (missingRequired.length === 0 && nodeOk && vercelOk) {
   }
   if (!nodeOk) console.log(`  Node version issue: ${nodeCheck.message}`);
   if (!vercelOk) console.log(`  Vercel config issues: ${vercelCheck.issues.join('; ')}`);
+  if (!contractAddressesOk) {
+    console.log(`  Contract address issues: ${contractAddressIssues.map((i) => i.message).join('; ')}`);
+  }
   process.exit(1);
 }
