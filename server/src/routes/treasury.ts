@@ -13,6 +13,7 @@ import {
   type CashflowRow,
   type CashflowImportPreview,
 } from "../services/treasurySimulationService";
+import { successEnvelope, errorEnvelope } from "../types/envelope";
 
 const router = Router();
 
@@ -51,17 +52,21 @@ router.post("/simulate", (req: Request, res: Response) => {
     }
 
     const result = simulateTreasury(scenario);
-    res.json(result);
+    const warnings = result.concentrationWarnings.length > 0
+      ? result.concentrationWarnings
+      : undefined;
+
+    res.json(successEnvelope(result, "treasury/simulate", warnings));
   } catch (err) {
     if (err instanceof TreasuryValidationError) {
-      res.status(err.statusCode).json({
-        error: err.message,
-        code: err.code,
-        details: err.details,
-      });
+      res.status(err.statusCode).json(
+        errorEnvelope(err.code, err.message, "treasury/simulate", err.details),
+      );
       return;
     }
-    res.status(400).json({ error: "Invalid request body" });
+    res.status(400).json(
+      errorEnvelope("INVALID_REQUEST", "Invalid request body", "treasury/simulate"),
+    );
   }
 });
 
@@ -77,17 +82,22 @@ router.post("/scenarios", (req: Request, res: Response) => {
     });
 
     saveScenario(scenario);
-    res.status(201).json({ id: scenario.id, name: scenario.name, createdAt: scenario.createdAt });
+    res.status(201).json(
+      successEnvelope(
+        { id: scenario.id, name: scenario.name, createdAt: scenario.createdAt },
+        "treasury/scenarios",
+      ),
+    );
   } catch (err) {
     if (err instanceof TreasuryValidationError) {
-      res.status(err.statusCode).json({
-        error: err.message,
-        code: err.code,
-        details: err.details,
-      });
+      res.status(err.statusCode).json(
+        errorEnvelope(err.code, err.message, "treasury/scenarios", err.details),
+      );
       return;
     }
-    res.status(400).json({ error: "Invalid request body" });
+    res.status(400).json(
+      errorEnvelope("INVALID_REQUEST", "Invalid request body", "treasury/scenarios"),
+    );
   }
 });
 
@@ -96,7 +106,7 @@ router.post("/scenarios", (req: Request, res: Response) => {
  * List all saved scenarios.
  */
 router.get("/scenarios", (_req: Request, res: Response) => {
-  res.json(listScenarios());
+  res.json(successEnvelope(listScenarios(), "treasury/scenarios"));
 });
 
 /**
@@ -106,10 +116,16 @@ router.get("/scenarios", (_req: Request, res: Response) => {
 router.get("/scenarios/:id", (req: Request, res: Response) => {
   const scenario = getScenario(req.params.id);
   if (!scenario) {
-    res.status(404).json({ error: "Scenario not found" });
+    res.status(404).json(
+      errorEnvelope("NOT_FOUND", "Scenario not found", "treasury/scenarios"),
+    );
     return;
   }
-  res.json({ scenario, simulation: simulateTreasury(scenario) });
+  const simulation = simulateTreasury(scenario);
+  const warnings = simulation.concentrationWarnings.length > 0
+    ? simulation.concentrationWarnings
+    : undefined;
+  res.json(successEnvelope({ scenario, simulation }, "treasury/scenarios", warnings));
 });
 
 /**
@@ -118,7 +134,9 @@ router.get("/scenarios/:id", (req: Request, res: Response) => {
 router.delete("/scenarios/:id", (req: Request, res: Response) => {
   const deleted = deleteScenario(req.params.id);
   if (!deleted) {
-    res.status(404).json({ error: "Scenario not found" });
+    res.status(404).json(
+      errorEnvelope("NOT_FOUND", "Scenario not found", "treasury/scenarios"),
+    );
     return;
   }
   res.status(204).send();
@@ -131,11 +149,18 @@ router.delete("/scenarios/:id", (req: Request, res: Response) => {
 router.post("/cashflow/preview", (req: Request, res: Response) => {
   const rows = req.body.rows ?? req.body;
   if (!Array.isArray(rows)) {
-    res.status(400).json({ error: "Request body must contain an array of cashflow rows." });
+    res.status(400).json(
+      errorEnvelope(
+        "VALIDATION_ERROR",
+        "Request body must contain an array of cashflow rows.",
+        "treasury/cashflow/preview",
+      ),
+    );
     return;
   }
   const preview = previewImport(rows);
-  res.json(preview);
+  const warnings = preview.warnings?.map((w: { code: string; message: string }) => w.message);
+  res.json(successEnvelope(preview, "treasury/cashflow/preview", warnings));
 });
 
 /**
@@ -146,19 +171,34 @@ router.post("/cashflow/preview", (req: Request, res: Response) => {
 router.post("/cashflow/import", (req: Request, res: Response) => {
   const { scenarioId, rows } = req.body;
   if (!scenarioId || !Array.isArray(rows)) {
-    res.status(400).json({ error: "scenarioId and rows array are required." });
+    res.status(400).json(
+      errorEnvelope(
+        "VALIDATION_ERROR",
+        "scenarioId and rows array are required.",
+        "treasury/cashflow/import",
+      ),
+    );
     return;
   }
   const preview = previewImport(rows);
   if (preview.errors.length > 0) {
-    res.status(422).json({
-      error: "Cashflow rows contain validation errors.",
-      preview,
-    });
+    res.status(422).json(
+      errorEnvelope(
+        "CASHFLOW_VALIDATION_ERROR",
+        "Cashflow rows contain validation errors.",
+        "treasury/cashflow/import",
+        { preview },
+      ),
+    );
     return;
   }
   // Future: persist rows to scenarioStore or a separate store
-  res.status(201).json({ imported: preview.validRows.length, preview });
+  res.status(201).json(
+    successEnvelope(
+      { imported: preview.validRows.length, preview },
+      "treasury/cashflow/import",
+    ),
+  );
 });
 
 export default router;
