@@ -210,6 +210,19 @@ model DriftEvent {
   @@index([vaultId, isRecovered])
 }
 
+model RiskPreferenceDriftSnapshot {
+  id               String   @id @default(uuid())
+  userId           String
+  statedPreference String   // conservative, balanced, aggressive
+  overallDriftPct  Float
+  isDrifting       Boolean
+  dimensionData    String   // JSON string of DriftDimension array
+  reason           String   // "auto_detected" or custom reset reason
+  createdAt        DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
 // ── Rebalance Queue Models (Issue #281) ─────────────────────────────────────────
 
 model RebalanceQueueEntry {
