@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import { riskPreferenceDriftService, type RiskPreference, type UserRiskProfile, type PortfolioBehavior } from "../services/riskPreferenceDriftService";
 import { stressMatrixService } from "../services/stressMatrixService";
 import { apyDispersionService, type ProviderApyInput } from "../services/apyDispersionService";
+import { requireAdmin } from "../middleware/authz";
 
 const router = Router();
 
@@ -148,7 +149,7 @@ router.get("/dispersion/config", (_req: Request, res: Response) => {
  * POST /api/risk/dispersion/config
  * Update dispersion configuration.
  */
-router.post("/dispersion/config", (req: Request, res: Response) => {
+router.post("/dispersion/config", scenarioMutationLimiter, requireAdmin, (req: Request, res: Response) => {
   try {
     const config = req.body;
     apyDispersionService.updateConfig(config);
@@ -189,7 +190,7 @@ router.get("/stress-matrix/scenarios", (_req: Request, res: Response) => {
  * POST /api/risk/stress-matrix/scenarios
  * Add a custom stress scenario.
  */
-router.post("/stress-matrix/scenarios", scenarioMutationLimiter, (req: Request, res: Response) => {
+router.post("/stress-matrix/scenarios", scenarioMutationLimiter, requireAdmin, (req: Request, res: Response) => {
   try {
     const scenario = req.body;
     if (!scenario.id || !scenario.name || !scenario.factors) {
@@ -210,7 +211,7 @@ router.post("/stress-matrix/scenarios", scenarioMutationLimiter, (req: Request, 
  * DELETE /api/risk/stress-matrix/scenarios/:scenarioId
  * Remove a stress scenario.
  */
-router.delete("/stress-matrix/scenarios/:scenarioId", (req: Request, res: Response) => {
+router.delete("/stress-matrix/scenarios/:scenarioId", scenarioMutationLimiter, requireAdmin, (req: Request, res: Response) => {
   const { scenarioId } = req.params;
   const removed = stressMatrixService.removeScenario(scenarioId);
 

@@ -116,6 +116,38 @@ function generateSignature(hash: string, privateKey?: string): string {
 }
 
 /**
+ * Redact tokens, prompts, and secrets from audit change payloads before
+ * they are hashed/persisted (#935 — audit logs must never leak credentials).
+ */
+const SENSITIVE_KEY_PATTERN =
+  /token|secret|password|apikey|api_key|prompt|authorization|privatekey|private_key|mnemonic|seed/i;
+
+function redactChanges(
+  value: unknown,
+  depth = 0,
+): unknown {
+  if (depth > 5 || value === null || value === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactChanges(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const redacted: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      redacted[key] = SENSITIVE_KEY_PATTERN.test(key)
+        ? "[REDACTED]"
+        : redactChanges(val, depth + 1);
+    }
+    return redacted;
+  }
+
+  return value;
+}
+
+/**
  * Extract user information from request
  */
 function extractUserInfo(req: Request): {
@@ -166,7 +198,7 @@ export async function createAuditEntry(
     method: req.method,
     endpoint: req.path,
     status: res.statusCode,
-    changes: context.changes,
+    changes: redactChanges(context.changes) as Record<string, unknown> | undefined,
     ipAddress: getClientIp(req),
     userAgent: req.headers["user-agent"] || "UNKNOWN",
     previousHash,
