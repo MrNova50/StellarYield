@@ -19,6 +19,18 @@ export interface LiquidationJobData {
   collateralValueUsd: string;
   /** Outstanding debt in sUSD */
   debtAmount: string;
+  /**
+   * Unix ms timestamp of the oracle price used to compute `currentCrBps`.
+   * Omitted when the scanner didn't attach price provenance (dry-run policy
+   * then skips the staleness check rather than blocking on missing data).
+   */
+  priceTimestampMs?: number;
+  /**
+   * Whether an oracle price was available when this job was enqueued.
+   * `false` means the scanner could not confirm a live price at all — the
+   * dry-run policy always blocks liquidation in that case.
+   */
+  oracleAvailable?: boolean;
 }
 
 /** Payload for an auto-compound job */
