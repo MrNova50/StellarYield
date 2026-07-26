@@ -9,7 +9,7 @@ mod storage;
 #[cfg(test)]
 mod test;
 
-use storage::{DataKey, Proposal, ProposalStatus};
+use storage::{DataKey, Proposal, ProposalStatus, INITIAL_STORAGE_VERSION};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -24,6 +24,9 @@ pub enum Error {
     ProposalAlreadyExecuted = 7,
     InsufficientVotingPower = 8,
     ChallengeWindowExpired = 9,
+    /// Migration target version is not exactly current + 1 — rejects repeated,
+    /// skipped, or out-of-order migrations before any state mutation.
+    InvalidMigrationVersion = 10,
 }
 
 // Interface for ve_tokenomics (veYIELD)
@@ -62,6 +65,9 @@ impl OptimisticGovernance {
             .set(&DataKey::ChallengeWindow, &challenge_window);
         env.storage().instance().set(&DataKey::ProposalCount, &0u64);
         env.storage().instance().set(&DataKey::IsInitialized, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &INITIAL_STORAGE_VERSION);
 
         Ok(())
     }
@@ -223,6 +229,48 @@ impl OptimisticGovernance {
             .instance()
             .get(&DataKey::ProposalCount)
             .unwrap_or(0)
+    }
+
+    // ── Storage Migrations (governance-gated, #896) ─────────────────
+
+    /// Returns the current storage schema version. Instances initialized
+    /// before this feature existed default to [`INITIAL_STORAGE_VERSION`].
+    pub fn get_storage_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::StorageVersion)
+            .unwrap_or(INITIAL_STORAGE_VERSION)
+    }
+
+    /// Advance the storage schema version by exactly one step. Admin-gated
+    /// (governance authority). Strictly sequential — rejects repeated,
+    /// skipped, or out-of-order migrations before mutating any state, and
+    /// emits a `migrate` event carrying the old version, new version, and
+    /// executor for indexer audit trails.
+    pub fn migrate_storage(env: Env, admin: Address, to_version: u32) -> Result<(), Error> {
+        Self::require_init(&env)?;
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let current_version = Self::get_storage_version(env.clone());
+        if to_version != current_version + 1 {
+            return Err(Error::InvalidMigrationVersion);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &to_version);
+
+        env.events().publish(
+            (symbol_short!("migrate"), admin.clone()),
+            (current_version, to_version, admin),
+        );
+
+        Ok(())
     }
 
     // ── Internal Helpers ──────────────────────────────────────────

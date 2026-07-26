@@ -127,7 +127,7 @@ impl YieldVault {
         }
         
         // Base confidence from sample count (min 3 samples for decent confidence)
-        let sample_confidence = if sample_count >= 10 {
+        let sample_confidence: u32 = if sample_count >= 10 {
             80
         } else if sample_count >= 5 {
             60
@@ -138,7 +138,10 @@ impl YieldVault {
         };
         
         // Calculate price volatility penalty
-        let prices: Vec<i128> = history.iter().map(|p| p.price).collect();
+        let mut prices: Vec<i128> = Vec::new(env);
+        for p in history.iter() {
+            prices.push_back(p.price);
+        }
         let volatility_penalty = Self::calculate_volatility_penalty(&prices);
         
         sample_confidence.saturating_sub(volatility_penalty)
@@ -154,7 +157,7 @@ impl YieldVault {
         let avg = sum / prices.len() as i128;
         
         let mut max_deviation = 0i128;
-        for &price in prices.iter() {
+        for price in prices.iter() {
             let deviation = if price > avg {
                 price - avg
             } else {

@@ -340,3 +340,90 @@ fn test_expired_uncleared_proposal_still_executable() {
     let result: i128 = val.into_val(&env);
     assert_eq!(result, 8); // 7 + 1
 }
+
+// ── Storage Migration Tests (#896) ─────────────────────────────────────
+
+#[test]
+fn test_initial_storage_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let ve_yield = env.register(MockVeYield, ());
+    let gov_id = env.register(OptimisticGovernance, ());
+    let client = OptimisticGovernanceClient::new(&env, &gov_id);
+
+    client.initialize(&admin, &ve_yield, &(3 * 24 * 60 * 60));
+
+    assert_eq!(client.get_storage_version(), 1);
+}
+
+#[test]
+fn test_migrate_storage_advances_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let ve_yield = env.register(MockVeYield, ());
+    let gov_id = env.register(OptimisticGovernance, ());
+    let client = OptimisticGovernanceClient::new(&env, &gov_id);
+
+    client.initialize(&admin, &ve_yield, &(3 * 24 * 60 * 60));
+
+    client.migrate_storage(&admin, &2);
+    assert_eq!(client.get_storage_version(), 2);
+}
+
+#[test]
+fn test_migrate_storage_repeated_version_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let ve_yield = env.register(MockVeYield, ());
+    let gov_id = env.register(OptimisticGovernance, ());
+    let client = OptimisticGovernanceClient::new(&env, &gov_id);
+
+    client.initialize(&admin, &ve_yield, &(3 * 24 * 60 * 60));
+
+    client.migrate_storage(&admin, &2);
+    // Repeating the same target version must be rejected, not silently re-applied.
+    let result = client.try_migrate_storage(&admin, &2);
+    assert!(result.is_err(), "repeated migration must be rejected");
+}
+
+#[test]
+fn test_migrate_storage_out_of_order_fails_before_mutation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let ve_yield = env.register(MockVeYield, ());
+    let gov_id = env.register(OptimisticGovernance, ());
+    let client = OptimisticGovernanceClient::new(&env, &gov_id);
+
+    client.initialize(&admin, &ve_yield, &(3 * 24 * 60 * 60));
+
+    // Skipping straight from version 1 to version 3 must fail...
+    let result = client.try_migrate_storage(&admin, &3);
+    assert!(result.is_err(), "out-of-order migration must be rejected");
+    // ...and must not have mutated the stored version.
+    assert_eq!(client.get_storage_version(), 1);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #3)")] // Unauthorized
+fn test_migrate_storage_by_non_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    let ve_yield = env.register(MockVeYield, ());
+    let gov_id = env.register(OptimisticGovernance, ());
+    let client = OptimisticGovernanceClient::new(&env, &gov_id);
+
+    client.initialize(&admin, &ve_yield, &(3 * 24 * 60 * 60));
+
+    client.migrate_storage(&impostor, &2);
+}

@@ -41,7 +41,13 @@ enum DataKey {
     ExecutedAdminOp(Bytes), // Hash of (network, contract, operation, nonce)
     // Cross-contract allowlist with network binding (#905)
     AllowedContractRole(Symbol), // Role -> Address allowlist (e.g., "zap" -> ZapContract)
+    // Governance-gated storage schema version (#896)
+    StorageVersion,
 }
+
+/// Storage schema version assigned to newly initialized vaults, and the
+/// implicit version of any vault deployed before migrations existed.
+pub const INITIAL_STORAGE_VERSION: u32 = 1;
 
 mod admin;
 mod donations;
@@ -83,6 +89,9 @@ pub enum VaultError {
     OperationReplayed = 2004,
     /// Cross-contract call from unauthorized or wrong-network contract (maps to error code 2005).
     UnauthorizedContract = 2005,
+    /// Migration target version is not exactly current + 1 — rejects repeated,
+    /// skipped, or out-of-order migrations before any state mutation (maps to error code 2006).
+    InvalidMigrationVersion = 2006,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────
@@ -113,6 +122,9 @@ impl YieldVault {
         env.storage().instance().set(&DataKey::TotalShares, &0i128);
         env.storage().instance().set(&DataKey::TotalAssets, &0i128);
         env.storage().instance().set(&DataKey::Initialized, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &INITIAL_STORAGE_VERSION);
 
         env.events()
             .publish((symbol_short!("init"),), (admin.clone(), token.clone()));
@@ -510,6 +522,30 @@ impl YieldVault {
     pub fn get_token(env: Env) -> Result<Address, VaultError> {
         YieldVault::require_init(&env)?;
         Self::get_storage_required(&env, &DataKey::Token)
+    }
+
+    // ── Storage Migrations (governance-gated, #896) ──────────────────
+
+    /// Returns the vault's current storage schema version. Vaults
+    /// initialized before this feature existed default to
+    /// [`INITIAL_STORAGE_VERSION`].
+    pub fn get_storage_version(env: Env) -> u32 {
+        YieldVault::get_storage_version_impl(&env)
+    }
+
+    /// Advance the vault's storage schema version by exactly one step.
+    ///
+    /// Migrations are strictly sequential: `to_version` must equal the
+    /// currently stored version + 1. Repeated calls (`to_version` at or
+    /// below the current version) and out-of-order or skipped calls
+    /// (`to_version` more than one ahead) are rejected with
+    /// [`VaultError::InvalidMigrationVersion`] before any state is mutated.
+    ///
+    /// # Arguments
+    /// * `admin` — Must be the vault admin (governance authority).
+    /// * `to_version` — The storage version to migrate to.
+    pub fn migrate_storage(env: Env, admin: Address, to_version: u32) -> Result<(), VaultError> {
+        YieldVault::migrate_storage_impl(env, admin, to_version)
     }
 
     // ── Strategy: Harvest & Auto-Compound ───────────────────────────
@@ -1154,6 +1190,60 @@ mod tests {
         let (env, client, _, _, _) = setup_env();
         let unknown = Address::generate(&env);
         assert_eq!(client.get_shares(&unknown), 0);
+    }
+
+    // ── Storage Migration Tests (#896) ──────────────────────────────
+
+    #[test]
+    fn test_initial_storage_version() {
+        let (_, client, _, _, _) = setup_env();
+        assert_eq!(client.get_storage_version(), INITIAL_STORAGE_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_storage_advances_version() {
+        let (_, client, admin, _, _) = setup_env();
+
+        client.migrate_storage(&admin, &2);
+        assert_eq!(client.get_storage_version(), 2);
+    }
+
+    #[test]
+    fn test_migrate_storage_sequential_steps() {
+        let (_, client, admin, _, _) = setup_env();
+
+        client.migrate_storage(&admin, &2);
+        client.migrate_storage(&admin, &3);
+        assert_eq!(client.get_storage_version(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2006)")]
+    fn test_migrate_storage_repeated_version_panics() {
+        let (_, client, admin, _, _) = setup_env();
+
+        client.migrate_storage(&admin, &2);
+        // Repeating the same target version must be rejected, not silently re-applied.
+        client.migrate_storage(&admin, &2);
+    }
+
+    #[test]
+    fn test_migrate_storage_out_of_order_fails_before_mutation() {
+        let (_, client, admin, _, _) = setup_env();
+
+        // Skipping straight from version 1 to version 3 must fail...
+        let result = client.try_migrate_storage(&admin, &3);
+        assert!(result.is_err());
+        // ...and must not have mutated the stored version.
+        assert_eq!(client.get_storage_version(), INITIAL_STORAGE_VERSION);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_migrate_storage_by_non_admin_panics() {
+        let (env, client, _, _, _) = setup_env();
+        let impostor = Address::generate(&env);
+        client.migrate_storage(&impostor, &2);
     }
 
     // ── Referral Tests ───────────────────────────────────────────────

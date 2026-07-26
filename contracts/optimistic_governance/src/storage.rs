@@ -9,7 +9,13 @@ pub enum DataKey {
     Proposal(u64),
     ProposalCount,
     IsInitialized,
+    // Governance-gated storage schema version (#896)
+    StorageVersion,
 }
+
+/// Storage schema version assigned on initialization, and the implicit
+/// version of any instance deployed before migrations existed.
+pub const INITIAL_STORAGE_VERSION: u32 = 1;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
