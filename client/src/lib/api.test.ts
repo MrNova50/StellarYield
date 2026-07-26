@@ -5,7 +5,22 @@ import {
   getApiBaseUrlState,
   apiFetch,
   getApiBaseUrlOrNull,
+  cachedApiFetch,
 } from "./api";
+
+vi.mock("./apiCache", () => ({
+  isEndpointCachable: vi.fn(),
+  getCacheEntry: vi.fn(),
+  setCache: vi.fn(),
+  getCache: vi.fn(),
+  clearCache: vi.fn(),
+  getCacheAge: vi.fn(),
+  getCachedEndpointList: vi.fn(),
+  SAFE_CACHE_ENDPOINTS: new Set(["/api/yields"]),
+}));
+vi.mock("../components/dashboard/freshnessDecay", () => ({
+  computeDecayedFreshnessConfidence: vi.fn(),
+}));
 
 describe("api URL helpers", () => {
   const originalWindow = global.window;
@@ -214,5 +229,149 @@ describe("apiFetch", () => {
     const [, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
     expect((init as any).method).toBe("DELETE");
     expect((init as any).body).toBe("payload");
+  });
+});
+
+describe("cachedApiFetch", () => {
+  let apiCacheModule: {
+    isEndpointCachable: ReturnType<typeof vi.fn>;
+    getCacheEntry: ReturnType<typeof vi.fn>;
+    setCache: ReturnType<typeof vi.fn>;
+    getCache: ReturnType<typeof vi.fn>;
+    clearCache: ReturnType<typeof vi.fn>;
+    getCacheAge: ReturnType<typeof vi.fn>;
+    getCachedEndpointList: ReturnType<typeof vi.fn>;
+    SAFE_CACHE_ENDPOINTS: Set<string>;
+  };
+  let freshnessDecayModule: {
+    computeDecayedFreshnessConfidence: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.stubGlobal("crypto", { randomUUID: () => "test-uuid" });
+    vi.stubGlobal("fetch", vi.fn());
+
+    apiCacheModule = await import("./apiCache");
+    freshnessDecayModule = await import("../components/dashboard/freshnessDecay") as any;
+
+    vi.mocked(apiCacheModule.isEndpointCachable).mockReturnValue(true);
+    vi.mocked(freshnessDecayModule.computeDecayedFreshnessConfidence).mockReturnValue({
+      confidence: 0.85,
+      unusable: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("returns live data on successful fetch", async () => {
+    const data = [{ protocol: "Blend", apy: 8.42 }];
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => data,
+    });
+
+    const result = await cachedApiFetch<unknown[]>("/api/yields");
+
+    expect(result.source).toBe("live");
+    expect(result.data).toEqual(data);
+    expect(result.age).toBeNull();
+    expect(result.cachedAt).toBeNull();
+    expect(result.confidence).toBe(1);
+    expect(vi.mocked(apiCacheModule.setCache)).toHaveBeenCalledWith("/api/yields", data, undefined);
+  });
+
+  it("caches data on successful fetch", async () => {
+    const data = { apy: 12.5 };
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => data,
+    });
+
+    await cachedApiFetch("/api/yields");
+
+    expect(vi.mocked(apiCacheModule.setCache)).toHaveBeenCalledWith("/api/yields", data, undefined);
+  });
+
+  it("returns cached data on network failure", async () => {
+    const cachedData = { apy: 10.0 };
+    vi.mocked(apiCacheModule.getCacheEntry).mockReturnValue({
+      data: cachedData,
+      cachedAt: new Date(Date.now() - 120_000).toISOString(),
+      endpoint: "/api/yields",
+      ttl: 45 * 60 * 1000,
+    } as any);
+
+    (global.fetch as any).mockRejectedValue(new Error("Network error"));
+
+    const result = await cachedApiFetch("/api/yields");
+
+    expect(result.source).toBe("cache");
+    expect(result.data).toEqual(cachedData);
+    expect(result.age).toBeGreaterThan(0);
+    expect(result.cachedAt).toBeDefined();
+    expect(result.confidence).toBe(0.85);
+  });
+
+  it("throws when no cache and network fails", async () => {
+    vi.mocked(apiCacheModule.getCacheEntry).mockReturnValue(null);
+    (global.fetch as any).mockRejectedValue(new Error("Network error"));
+
+    await expect(cachedApiFetch("/api/yields")).rejects.toThrow();
+  });
+
+  it("does not cache non-cachable endpoints", async () => {
+    vi.mocked(apiCacheModule.isEndpointCachable).mockReturnValue(false);
+    const data = { result: "ok" };
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => data,
+    });
+
+    const result = await cachedApiFetch("/api/withdraw");
+
+    expect(result.source).toBe("live");
+    expect(vi.mocked(apiCacheModule.setCache)).not.toHaveBeenCalled();
+  });
+
+  it("returns correct metadata when serving from cache", async () => {
+    const cachedAt = new Date(Date.now() - 300_000).toISOString();
+    vi.mocked(apiCacheModule.getCacheEntry).mockReturnValue({
+      data: { apy: 5 },
+      cachedAt,
+      endpoint: "/api/yields",
+      ttl: 45 * 60 * 1000,
+    } as any);
+
+    (global.fetch as any).mockRejectedValue(new Error("offline"));
+
+    const result = await cachedApiFetch("/api/yields");
+
+    expect(result.source).toBe("cache");
+    expect(result.cachedAt).toBe(cachedAt);
+    expect(typeof result.age).toBe("number");
+    expect(result.age).toBeGreaterThanOrEqual(0);
+  });
+
+  it("invokes onCacheHit callback when cache is served", async () => {
+    const cachedAt = new Date(Date.now() - 60_000).toISOString();
+    vi.mocked(apiCacheModule.getCacheEntry).mockReturnValue({
+      data: { apy: 5 },
+      cachedAt,
+      endpoint: "/api/yields",
+      ttl: 45 * 60 * 1000,
+    } as any);
+    (global.fetch as any).mockRejectedValue(new Error("offline"));
+
+    const onCacheHit = vi.fn();
+    await cachedApiFetch("/api/yields", { onCacheHit });
+
+    expect(onCacheHit).toHaveBeenCalledWith({
+      age: expect.any(Number),
+      cachedAt,
+    });
   });
 });
