@@ -621,3 +621,23 @@ model ProjectionAuditLog {
   @@index([vaultId, auditType, auditedAt])
   @@index([hasDrift, auditedAt])
 }
+
+// ── Reward Claim Models (Issue #996) ──────────────────────────────────────────
+
+model RewardClaim {
+  id               String   @id @default(uuid())
+  idempotencyKey   String   @unique
+  epoch            Int
+  claimant         String
+  amount           String
+  merkleRoot       String
+  index            Int
+  status           String   @default("pending") // pending, submitted, confirmed, failed
+  txHash           String?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([claimant, status])
+  @@index([epoch, status])
+}
