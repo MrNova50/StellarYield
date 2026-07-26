@@ -4,6 +4,7 @@ import { Horizon, rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { validateServerEnv } from "../config/env";
+import { getRegistryProvenance } from "../services/contractRegistry";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -385,7 +386,16 @@ router.get("/startup", async (_req: Request, res: Response) => {
     horizonRpc: hasValue(env.STELLAR_HORIZON_URL) ? "operational" : "fallback",
   };
 
-  const status = validation.errors.length > 0
+  // #936 — registry provenance: proves which source/network/commit produced
+  // the contract addresses this server is using. A manifest that exists but
+  // fails verification (tampered contract ID/network, missing fields) fails
+  // startup diagnostics; a missing manifest is only fatal in production.
+  const registryProvenance = getRegistryProvenance();
+  const registryProvenanceFatal =
+    !registryProvenance.available &&
+    (env.NODE_ENV === "production" || registryProvenance.issues[0] !== "deployment-manifest.json not found");
+
+  const status = validation.errors.length > 0 || registryProvenanceFatal
     ? "failed"
     : validation.warnings.length > 0
       ? "degraded"
@@ -396,6 +406,7 @@ router.get("/startup", async (_req: Request, res: Response) => {
     capabilities,
     errors: validation.errors,
     warnings: validation.warnings,
+    registryProvenance,
     timestamp: new Date().toISOString(),
   };
 
