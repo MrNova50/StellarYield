@@ -26,6 +26,7 @@ import feesRouter from "./routes/fees";
 import transparencyRouter from "./routes/transparency";
 import donationsRouter from "./routes/donations";
 import referralsRouter from "./routes/referrals";
+import rewardsRouter from "./routes/rewards";
 import adminRouter from "./routes/admin";
 import auditMonitoringRouter from "./routes/auditMonitoring";
 import weeklyReportsRouter from "./routes/weeklyReports";
@@ -124,6 +125,7 @@ export function createApp() {
   app.use("/api/transparency", transparencyRouter);
   app.use("/api/donations", donationsRouter);
   app.use("/api/referrals", referralsRouter);
+  app.use("/api/rewards", rewardsRouter);
   app.use("/api/onramp", onrampRouter);
   app.use("/api/zap", zapRouter);
   app.use("/api/deposits", depositsRouter);
