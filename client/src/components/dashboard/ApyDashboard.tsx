@@ -21,7 +21,8 @@ import {
   Grid2x2,
   Maximize2,
 } from "lucide-react";
-import { apiUrl } from "../../lib/api";
+import { apiUrl, cachedApiFetch, type CachedApiResult } from "../../lib/api";
+import { FreshnessBanner } from "./FreshnessBanner";
 import { LiquidityBufferPanel } from "./LiquidityBufferPanel";
 import { computeDecayedFreshnessConfidence } from "./freshnessDecay";
 import { RISK_EXPLANATIONS, RiskLevel } from "../../config/riskConfig";
@@ -289,6 +290,10 @@ export default function ApyDashboard() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [refreshing, setRefreshing] = useState(false);
+  const [dataSource, setDataSource] = useState<"live" | "cache">("live");
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [cacheAge, setCacheAge] = useState<number | null>(null);
+  const [cacheConfidence, setCacheConfidence] = useState<number>(1);
 
   const fetchApyData = async (showLoadingState = true) => {
     if (showLoadingState) {
@@ -297,15 +302,15 @@ export default function ApyDashboard() {
 
     try {
       setError(null);
-      const res = await fetch(apiUrl("/api/yields"));
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: unknown = await res.json();
-      const rows = Array.isArray(data) ? data : [];
+      const result = await cachedApiFetch<unknown[]>("/api/yields");
+      const rows = Array.isArray(result.data) ? result.data : [];
       const augmented: ApyEntry[] = rows.map((row) => {
         const entry = normalizeApyEntry(row as ApiApyEntry);
         const fetchedTime = entry.fetchedAt
           ? new Date(entry.fetchedAt).getTime()
-          : Date.now();
+          : result.cachedAt
+            ? new Date(result.cachedAt).getTime()
+            : Date.now();
         const freshness = computeDecayedFreshnessConfidence(
           Date.now() - fetchedTime,
         );
@@ -316,9 +321,23 @@ export default function ApyDashboard() {
         };
       });
       setApyData(augmented);
+      setDataSource(result.source);
+      if (result.source === "cache") {
+        setCachedAt(result.cachedAt);
+        setCacheAge(result.age);
+        setCacheConfidence(result.confidence);
+      } else {
+        setCachedAt(null);
+        setCacheAge(null);
+        setCacheConfidence(1);
+      }
     } catch (err) {
       setError(getErrorMessage(err));
       setApyData([]);
+      setDataSource("live");
+      setCachedAt(null);
+      setCacheAge(null);
+      setCacheConfidence(1);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -471,6 +490,15 @@ export default function ApyDashboard() {
           {refreshing ? "Refreshing..." : "Refresh Rates"}
         </button>
       </header>
+
+      {dataSource === "cache" && (
+        <FreshnessBanner
+          source="cache"
+          lastUpdated={cachedAt ?? undefined}
+          confidence={cacheConfidence}
+          onRefresh={handleRefresh}
+        />
+      )}
 
       {error && (
         <div
