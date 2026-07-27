@@ -60,3 +60,24 @@ echo
 echo
 echo "💡 Tip: Use 'GITHUB_TOKEN=ghp_xxx node scripts/issue-triage.js' for an automated dashboard"
 echo "📖 Full workflow: docs/triage-process.md"
+
+# --- BEGIN GENERATED SAVED SEARCHES (scripts/refresh-saved-searches.js) ---
+echo "1. Unclaimed Wave Issues (Ready for contributors):"
+echo "    https://github.com/edehvictor/StellarYield/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22Stellar%20Wave%22%20label%3A%22help%20wanted%22%20no%3Aassignee"
+echo
+echo "2. Claimed Wave Issues (In progress, no PR yet):"
+echo "    https://github.com/edehvictor/StellarYield/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22Stellar%20Wave%22%20has%3Aassignee%20-linked%3Apr"
+echo
+echo "3. Wave PRs (Pending review):"
+echo "    https://github.com/edehvictor/StellarYield/issues?q=is%3Apr%20is%3Aopen%20label%3A%22Stellar%20Wave%22"
+echo
+echo "4. Blocked Issues (Waiting on external data):"
+echo "    https://github.com/edehvictor/StellarYield/issues?q=is%3Aissue%20is%3Aopen%20label%3Ablocked"
+echo
+echo "5. Needs Info (Waiting on contributor response):"
+echo "    https://github.com/edehvictor/StellarYield/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22needs%20info%22"
+echo
+echo "6. All Open Issues:"
+echo "    https://github.com/edehvictor/StellarYield/issues?q=is%3Aissue%20is%3Aopen"
+echo
+# --- END GENERATED SAVED SEARCHES ---
