@@ -1,6 +1,21 @@
-import http from "http";
 import request from "supertest";
-import { simulateTreasury, saveScenario, getScenario, listScenarios, deleteScenario, assertValidScenarioInput, previewImport, TreasuryValidationError, SUPPORTED_ASSETS, CASHFLOW_CATEGORIES, type TreasuryScenario, type AllocationPosition, type CashflowRow } from "../services/treasurySimulationService";
+import {
+  simulateTreasury,
+  compareTreasuryScenarios,
+  exportComparisonJSON,
+  exportComparisonCSV,
+  DEFAULT_STRESS_RUNS,
+  saveScenario,
+  getScenario,
+  listScenarios,
+  deleteScenario,
+  assertValidScenarioInput,
+  previewImport,
+  SUPPORTED_ASSETS,
+  CASHFLOW_CATEGORIES,
+  type TreasuryScenario,
+  type AllocationPosition,
+} from "../services/treasurySimulationService";
 
 const baseAllocations: AllocationPosition[] = [
   { vaultId: "blend", vaultName: "Blend", allocationPct: 60, apy: 6.5, tvlUsd: 12_000_000, riskScore: 8, rotationCostPct: 0.1 },
@@ -217,7 +232,7 @@ describe("previewImport - cashflow row validation", () => {
   });
 
   it("rejects missing id", () => {
-    const { id, ...rest } = validRow;
+    const { id: _id, ...rest } = validRow;
     const result = previewImport([rest]);
     expect(result.validRows).toHaveLength(0);
     expect(result.errors.some((e) => e.code === "missing_id")).toBe(true);
@@ -277,7 +292,7 @@ describe("previewImport - cashflow row validation", () => {
   });
 
   it("rejects missing direction", () => {
-    const { direction, ...rest } = validRow;
+    const { direction: _direction, ...rest } = validRow;
     const result = previewImport([rest]);
     expect(result.errors.some((e) => e.code === "missing_direction")).toBe(true);
   });
@@ -319,6 +334,66 @@ describe("previewImport - cashflow row validation", () => {
     expect(result.validRows).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
     expect(result.summary.totalRows).toBe(0);
+  });
+});
+
+describe("compareTreasuryScenarios", () => {
+  it("computes baseline and stress runs comparison with deltas", () => {
+    const scenario = makeScenario({ totalCapitalUsd: 1_000_000 });
+    const comparison = compareTreasuryScenarios(scenario);
+
+    expect(comparison.baseline.scenarioName).toBe("Test Scenario");
+    expect(comparison.baseline.totals.projectedYieldUsd).toBeGreaterThan(0);
+    expect(comparison.stressRuns.length).toBe(Object.keys(DEFAULT_STRESS_RUNS).length);
+
+    const yieldCollapse = comparison.stressRuns.find((sr) => sr.stressId === "yield-collapse");
+    expect(yieldCollapse).toBeDefined();
+    expect(yieldCollapse!.totals.projectedYieldUsd).toBeLessThan(comparison.baseline.totals.projectedYieldUsd);
+    expect(yieldCollapse!.totals.yieldDeltaUsd).toBeLessThan(0);
+    expect(yieldCollapse!.totals.yieldDeltaPct).toBeCloseTo(-50, 0);
+
+    expect(comparison.summary.worstCaseYieldUsd).toBeLessThanOrEqual(comparison.baseline.totals.projectedYieldUsd);
+    expect(comparison.summary.maxYieldLossUsd).toBeGreaterThan(0);
+  });
+
+  it("evaluates custom/selected stress run IDs", () => {
+    const scenario = makeScenario();
+    const comparison = compareTreasuryScenarios(scenario, ["severe-crash"]);
+
+    expect(comparison.stressRuns).toHaveLength(1);
+    expect(comparison.stressRuns[0].stressId).toBe("severe-crash");
+  });
+});
+
+describe("exportComparisonJSON and exportComparisonCSV", () => {
+  it("exportComparisonJSON formats valid JSON with all metadata", () => {
+    const scenario = makeScenario();
+    const comparison = compareTreasuryScenarios(scenario);
+    const jsonStr = exportComparisonJSON(comparison);
+
+    const parsed = JSON.parse(jsonStr);
+    expect(parsed.exportedAt).toBeDefined();
+    expect(parsed.baseline.scenarioName).toBe("Test Scenario");
+    expect(parsed.baseline.assumptions.allocations).toHaveLength(2);
+    expect(parsed.stressRuns).toHaveLength(3);
+    expect(parsed.summary.maxYieldLossUsd).toBeDefined();
+  });
+
+  it("exportComparisonCSV includes metadata headers, summary, run matrix, and allocations", () => {
+    const scenario = makeScenario();
+    const comparison = compareTreasuryScenarios(scenario);
+    const csv = exportComparisonCSV(comparison);
+
+    expect(csv).toContain("# Treasury Scenario Comparison Report");
+    expect(csv).toContain("# Scenario Name: Test Scenario");
+    expect(csv).toContain("# SUMMARY");
+    expect(csv).toContain("Baseline Projected Yield ($)");
+    expect(csv).toContain("Worst-Case Projected Yield ($)");
+    expect(csv).toContain("# RUN COMPARISON");
+    expect(csv).toContain('"baseline"');
+    expect(csv).toContain('"yield-collapse"');
+    expect(csv).toContain("# ALLOCATION ASSUMPTIONS");
+    expect(csv).toContain('"blend"');
   });
 });
 
@@ -595,6 +670,74 @@ describe("Treasury Route Envelope Contract", () => {
         .expect(400);
 
       expectErrorEnvelope(res.body, "VALIDATION_ERROR");
+    });
+  });
+
+  // ── POST /api/treasury/compare ───────────────────────────────────────────
+
+  describe("POST /api/treasury/compare", () => {
+    it("returns success envelope with baseline vs stress comparison payload", async () => {
+      const res = await request(app)
+        .post("/api/treasury/compare")
+        .send({ name: "Compare Test", totalCapitalUsd: 1_000_000, allocations: validAllocations })
+        .expect(200);
+
+      expectSuccessEnvelope(res.body, "treasury/compare");
+      expect(res.body.data).toMatchObject({
+        exportedAt: expect.any(String),
+        baseline: expect.objectContaining({ scenarioName: "Compare Test" }),
+        stressRuns: expect.any(Array),
+        summary: expect.objectContaining({ worstCaseYieldUsd: expect.any(Number) }),
+      });
+    });
+
+    it("returns validation error envelope for invalid capital", async () => {
+      const res = await request(app)
+        .post("/api/treasury/compare")
+        .send({ name: "Bad Capital", totalCapitalUsd: -500, allocations: validAllocations })
+        .expect(400);
+
+      expectErrorEnvelope(res.body, "invalid_totalCapitalUsd");
+    });
+  });
+
+  // ── POST /api/treasury/export-comparison ──────────────────────────────────
+
+  describe("POST /api/treasury/export-comparison", () => {
+    it("returns downloadable JSON content by default", async () => {
+      const res = await request(app)
+        .post("/api/treasury/export-comparison")
+        .send({ name: "JSON Export Test", totalCapitalUsd: 1_000_000, allocations: validAllocations, format: "json" })
+        .expect(200);
+
+      expect(res.headers["content-type"]).toContain("application/json");
+      expect(res.headers["content-disposition"]).toContain("treasury_scenario_comparison.json");
+      const parsed = JSON.parse(res.text);
+      expect(parsed.baseline.scenarioName).toBe("JSON Export Test");
+      expect(parsed.stressRuns.length).toBeGreaterThan(0);
+    });
+
+    it("returns downloadable CSV content when format=csv", async () => {
+      const res = await request(app)
+        .post("/api/treasury/export-comparison")
+        .send({ name: "CSV Export Test", totalCapitalUsd: 1_000_000, allocations: validAllocations, format: "csv" })
+        .expect(200);
+
+      expect(res.headers["content-type"]).toContain("text/csv");
+      expect(res.headers["content-disposition"]).toContain("treasury_scenario_comparison.csv");
+      expect(res.text).toContain("# Treasury Scenario Comparison Report");
+      expect(res.text).toContain("# Scenario Name: CSV Export Test");
+      expect(res.text).toContain('"baseline"');
+    });
+
+    it("returns validation error for invalid allocation sum on export", async () => {
+      const badAllocations = [{ ...validAllocations[0], allocationPct: 10 }];
+      const res = await request(app)
+        .post("/api/treasury/export-comparison")
+        .send({ name: "Bad Export", totalCapitalUsd: 1_000_000, allocations: badAllocations, format: "csv" })
+        .expect(400);
+
+      expect(res.body.ok).toBe(false);
     });
   });
 });

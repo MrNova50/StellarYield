@@ -203,6 +203,315 @@ export function simulateTreasury(scenario: TreasuryScenario): SimulationResult {
   };
 }
 
+// ── Treasury Scenario Comparison & Export ──────────────────────────
+
+export interface StressRunConfig {
+  id: string;
+  name: string;
+  description: string;
+  apyMultiplier: number;
+  rotationCostMultiplier: number;
+  riskScoreMultiplier: number;
+  tvlMultiplier: number;
+}
+
+export const DEFAULT_STRESS_RUNS: Record<string, StressRunConfig> = {
+  "yield-collapse": {
+    id: "yield-collapse",
+    name: "Yield Collapse (-50% APY)",
+    description: "Simulates a 50% APY haircut across all positions.",
+    apyMultiplier: 0.5,
+    rotationCostMultiplier: 1.0,
+    riskScoreMultiplier: 1.0,
+    tvlMultiplier: 1.0,
+  },
+  "liquidity-crunch": {
+    id: "liquidity-crunch",
+    name: "Liquidity Crunch (+100% Cost, -50% TVL)",
+    description: "Simulates 2x rotation cost friction and 50% TVL drop.",
+    apyMultiplier: 0.8,
+    rotationCostMultiplier: 2.0,
+    riskScoreMultiplier: 0.8,
+    tvlMultiplier: 0.5,
+  },
+  "severe-crash": {
+    id: "severe-crash",
+    name: "Severe Market Crash (-70% APY, 3x Cost)",
+    description: "Simulates acute market stress with 70% APY reduction and 3x rotation cost.",
+    apyMultiplier: 0.3,
+    rotationCostMultiplier: 3.0,
+    riskScoreMultiplier: 0.5,
+    tvlMultiplier: 0.3,
+  },
+};
+
+export interface StressRunResult {
+  stressId: string;
+  stressName: string;
+  description: string;
+  assumptions: {
+    apyMultiplier: number;
+    rotationCostMultiplier: number;
+    riskScoreMultiplier: number;
+    tvlMultiplier: number;
+  };
+  totals: {
+    projectedYieldPct: number;
+    projectedYieldUsd: number;
+    totalRotationCostUsd: number;
+    netYieldUsd: number;
+    liquidityRiskScore: number;
+    yieldDeltaUsd: number;
+    yieldDeltaPct: number;
+    riskScoreDelta: number;
+  };
+  warnings: string[];
+}
+
+export interface ScenarioComparisonResult {
+  exportedAt: string;
+  baseline: {
+    scenarioId: string;
+    scenarioName: string;
+    totalCapitalUsd: number;
+    assumptions: {
+      totalCapitalUsd: number;
+      allocationCount: number;
+      allocations: AllocationPosition[];
+    };
+    totals: {
+      projectedYieldPct: number;
+      projectedYieldUsd: number;
+      totalRotationCostUsd: number;
+      netYieldUsd: number;
+      liquidityRiskScore: number;
+    };
+    warnings: string[];
+  };
+  stressRuns: StressRunResult[];
+  summary: {
+    worstCaseYieldUsd: number;
+    worstCaseNetYieldUsd: number;
+    maxYieldLossUsd: number;
+    maxYieldLossPct: number;
+    totalWarningsCount: number;
+  };
+}
+
+export function compareTreasuryScenarios(
+  scenario: TreasuryScenario,
+  selectedStressIds?: string[],
+): ScenarioComparisonResult {
+  const baselineSim = simulateTreasury(scenario);
+  const baselineNetYieldUsd = Math.round((baselineSim.projectedYieldUsd - baselineSim.totalRotationCostUsd) * 100) / 100;
+
+  const stressIds = selectedStressIds && selectedStressIds.length > 0
+    ? selectedStressIds
+    : Object.keys(DEFAULT_STRESS_RUNS);
+
+  const stressResults: StressRunResult[] = [];
+
+  for (const id of stressIds) {
+    const config = DEFAULT_STRESS_RUNS[id] ?? {
+      id,
+      name: id,
+      description: `Custom stress run ${id}`,
+      apyMultiplier: 0.5,
+      rotationCostMultiplier: 1.5,
+      riskScoreMultiplier: 0.8,
+      tvlMultiplier: 0.7,
+    };
+
+    const stressedAllocations: AllocationPosition[] = scenario.allocations.map((a) => ({
+      ...a,
+      apy: Math.max(0, Math.round(a.apy * config.apyMultiplier * 100) / 100),
+      rotationCostPct: Math.round(a.rotationCostPct * config.rotationCostMultiplier * 100) / 100,
+      riskScore: Math.max(0, Math.min(10, Math.round(a.riskScore * config.riskScoreMultiplier * 10) / 10)),
+      tvlUsd: Math.max(0, Math.round(a.tvlUsd * config.tvlMultiplier)),
+    }));
+
+    const stressedScenario: TreasuryScenario = {
+      ...scenario,
+      allocations: stressedAllocations,
+    };
+
+    const stressSim = simulateTreasury(stressedScenario);
+    const stressNetYieldUsd = Math.round((stressSim.projectedYieldUsd - stressSim.totalRotationCostUsd) * 100) / 100;
+    const yieldDeltaUsd = Math.round((stressSim.projectedYieldUsd - baselineSim.projectedYieldUsd) * 100) / 100;
+    const yieldDeltaPct = baselineSim.projectedYieldUsd > 0
+      ? Math.round(((stressSim.projectedYieldUsd - baselineSim.projectedYieldUsd) / baselineSim.projectedYieldUsd) * 10000) / 100
+      : 0;
+    const riskScoreDelta = Math.round((stressSim.liquidityRiskScore - baselineSim.liquidityRiskScore) * 100) / 100;
+
+    const stressWarnings = [...stressSim.concentrationWarnings];
+    if (stressNetYieldUsd < 0) {
+      stressWarnings.push(`Net yield turns negative ($${stressNetYieldUsd.toLocaleString()}) under ${config.name}`);
+    } else if (yieldDeltaPct <= -50) {
+      stressWarnings.push(`Severe yield reduction (${yieldDeltaPct.toFixed(1)}%) under ${config.name}`);
+    }
+
+    stressResults.push({
+      stressId: config.id,
+      stressName: config.name,
+      description: config.description,
+      assumptions: {
+        apyMultiplier: config.apyMultiplier,
+        rotationCostMultiplier: config.rotationCostMultiplier,
+        riskScoreMultiplier: config.riskScoreMultiplier,
+        tvlMultiplier: config.tvlMultiplier,
+      },
+      totals: {
+        projectedYieldPct: stressSim.projectedYieldPct,
+        projectedYieldUsd: stressSim.projectedYieldUsd,
+        totalRotationCostUsd: stressSim.totalRotationCostUsd,
+        netYieldUsd: stressNetYieldUsd,
+        liquidityRiskScore: stressSim.liquidityRiskScore,
+        yieldDeltaUsd,
+        yieldDeltaPct,
+        riskScoreDelta,
+      },
+      warnings: stressWarnings,
+    });
+  }
+
+  let worstCaseYieldUsd = baselineSim.projectedYieldUsd;
+  let worstCaseNetYieldUsd = baselineNetYieldUsd;
+  let totalWarningsCount = baselineSim.concentrationWarnings.length;
+
+  for (const sr of stressResults) {
+    if (sr.totals.projectedYieldUsd < worstCaseYieldUsd) {
+      worstCaseYieldUsd = sr.totals.projectedYieldUsd;
+    }
+    if (sr.totals.netYieldUsd < worstCaseNetYieldUsd) {
+      worstCaseNetYieldUsd = sr.totals.netYieldUsd;
+    }
+    totalWarningsCount += sr.warnings.length;
+  }
+
+  const maxYieldLossUsd = Math.round((baselineSim.projectedYieldUsd - worstCaseYieldUsd) * 100) / 100;
+  const maxYieldLossPct = baselineSim.projectedYieldUsd > 0
+    ? Math.round((maxYieldLossUsd / baselineSim.projectedYieldUsd) * 10000) / 100
+    : 0;
+
+  return {
+    exportedAt: new Date().toISOString(),
+    baseline: {
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      totalCapitalUsd: scenario.totalCapitalUsd,
+      assumptions: {
+        totalCapitalUsd: scenario.totalCapitalUsd,
+        allocationCount: scenario.allocations.length,
+        allocations: scenario.allocations,
+      },
+      totals: {
+        projectedYieldPct: baselineSim.projectedYieldPct,
+        projectedYieldUsd: baselineSim.projectedYieldUsd,
+        totalRotationCostUsd: baselineSim.totalRotationCostUsd,
+        netYieldUsd: baselineNetYieldUsd,
+        liquidityRiskScore: baselineSim.liquidityRiskScore,
+      },
+      warnings: baselineSim.concentrationWarnings,
+    },
+    stressRuns: stressResults,
+    summary: {
+      worstCaseYieldUsd,
+      worstCaseNetYieldUsd,
+      maxYieldLossUsd,
+      maxYieldLossPct,
+      totalWarningsCount,
+    },
+  };
+}
+
+export function exportComparisonJSON(comparison: ScenarioComparisonResult): string {
+  return JSON.stringify(comparison, null, 2);
+}
+
+export function exportComparisonCSV(comparison: ScenarioComparisonResult): string {
+  const lines: string[] = [];
+
+  lines.push("# Treasury Scenario Comparison Report");
+  lines.push(`# Scenario Name: ${comparison.baseline.scenarioName}`);
+  lines.push(`# Scenario ID: ${comparison.baseline.scenarioId}`);
+  lines.push(`# Total Capital (USD): $${comparison.baseline.totalCapitalUsd.toLocaleString()}`);
+  lines.push(`# Exported At: ${comparison.exportedAt}`);
+  lines.push("");
+
+  lines.push("# SUMMARY");
+  lines.push("Metric,Value");
+  lines.push(`Baseline Projected Yield ($),$${comparison.baseline.totals.projectedYieldUsd.toFixed(2)}`);
+  lines.push(`Baseline Net Yield ($),$${comparison.baseline.totals.netYieldUsd.toFixed(2)}`);
+  lines.push(`Worst-Case Projected Yield ($),$${comparison.summary.worstCaseYieldUsd.toFixed(2)}`);
+  lines.push(`Worst-Case Net Yield ($),$${comparison.summary.worstCaseNetYieldUsd.toFixed(2)}`);
+  lines.push(`Max Yield Loss ($),$${comparison.summary.maxYieldLossUsd.toFixed(2)}`);
+  lines.push(`Max Yield Loss (%),${comparison.summary.maxYieldLossPct.toFixed(2)}%`);
+  lines.push(`Total Warnings Count,${comparison.summary.totalWarningsCount}`);
+  lines.push("");
+
+  lines.push("# RUN COMPARISON");
+  lines.push("Run ID,Run Name,Run Type,Projected Yield (%),Projected Yield ($),Rotation Cost ($),Net Yield ($),Liquidity Risk Score,Yield Delta ($),Yield Delta (%),Warnings Count,Warning Details");
+
+  const b = comparison.baseline;
+  const bWarningsFormatted = b.warnings.map((w) => `${w.replace(/"/g, '""')}`).join("; ");
+  lines.push(
+    [
+      `"baseline"`,
+      `"${b.scenarioName.replace(/"/g, '""')}"`,
+      `"Baseline"`,
+      b.totals.projectedYieldPct.toFixed(2),
+      b.totals.projectedYieldUsd.toFixed(2),
+      b.totals.totalRotationCostUsd.toFixed(2),
+      b.totals.netYieldUsd.toFixed(2),
+      b.totals.liquidityRiskScore.toFixed(2),
+      "0.00",
+      "0.00",
+      b.warnings.length,
+      bWarningsFormatted ? `"${bWarningsFormatted}"` : '""',
+    ].join(",")
+  );
+
+  for (const sr of comparison.stressRuns) {
+    const sWarningsFormatted = sr.warnings.map((w) => `${w.replace(/"/g, '""')}`).join("; ");
+    lines.push(
+      [
+        `"${sr.stressId}"`,
+        `"${sr.stressName.replace(/"/g, '""')}"`,
+        `"Stress"`,
+        sr.totals.projectedYieldPct.toFixed(2),
+        sr.totals.projectedYieldUsd.toFixed(2),
+        sr.totals.totalRotationCostUsd.toFixed(2),
+        sr.totals.netYieldUsd.toFixed(2),
+        sr.totals.liquidityRiskScore.toFixed(2),
+        sr.totals.yieldDeltaUsd.toFixed(2),
+        sr.totals.yieldDeltaPct.toFixed(2),
+        sr.warnings.length,
+        sWarningsFormatted ? `"${sWarningsFormatted}"` : '""',
+      ].join(",")
+    );
+  }
+
+  lines.push("");
+  lines.push("# ALLOCATION ASSUMPTIONS");
+  lines.push("Vault ID,Vault Name,Allocation (%),APY (%),TVL ($),Risk Score,Rotation Cost (%)");
+
+  for (const alloc of comparison.baseline.assumptions.allocations) {
+    lines.push(
+      [
+        `"${alloc.vaultId}"`,
+        `"${alloc.vaultName.replace(/"/g, '""')}"`,
+        alloc.allocationPct.toFixed(2),
+        alloc.apy.toFixed(2),
+        alloc.tvlUsd.toFixed(2),
+        alloc.riskScore.toFixed(2),
+        alloc.rotationCostPct.toFixed(2),
+      ].join(",")
+    );
+  }
+
+  return lines.join("\n");
+}
+
 export function saveScenario(scenario: TreasuryScenario): void {
   scenarioStore.set(scenario.id, scenario);
 }
