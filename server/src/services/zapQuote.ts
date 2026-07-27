@@ -247,8 +247,12 @@ export function verifyZapQuote(quote: any): { valid: boolean; reason?: string; e
   ]);
   for (const hop of quote.path) {
     if (!supportedIds.has(hop.contractId)) {
-      return { valid: false, reason: `Asset ${hop.contractId} is no longer supported`, errorCode: "ROUTE_MISMATCH" };
+      return { valid: false, reason: `Asset ${hop.contractId} is no longer supported`, errorCode: "UNSUPPORTED_ASSET" };
     }
+  }
+  // Check slippage exceeded — reject quotes where applied slippage exceeds maximum threshold
+  if (typeof quote.slippageApplied === "number" && quote.slippageApplied > 0.15) {
+    return { valid: false, reason: `Slippage ${(quote.slippageApplied * 100).toFixed(2)}% exceeds maximum allowed threshold of 15%`, errorCode: "SLIPPAGE_EXCEEDED" };
   }
   return { valid: true };
 }
