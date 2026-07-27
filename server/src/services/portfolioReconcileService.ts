@@ -403,6 +403,7 @@ export class PortfolioReconcileService {
     if (metadata) {
       entry.metadata = metadata
     }
+    console.log(`[Reconciliation] ${status} for ${walletAddress}`)
     persistReconciliationEvent(entry)
   }
 

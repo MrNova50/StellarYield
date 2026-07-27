@@ -13,7 +13,10 @@ const HORIZON_URL =
   process.env.STELLAR_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 const SOROBAN_RPC_URL =
   process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
-const HEALTH_TIMEOUT_MS = Number(process.env.HEALTH_CHECK_TIMEOUT_MS ?? "5000");
+const HEALTH_TIMEOUT_MS =
+  process.env.NODE_ENV === "test"
+    ? 500
+    : Number(process.env.HEALTH_CHECK_TIMEOUT_MS ?? "5000");
 const _INDEXER_LAG_WARN_THRESHOLD = Number(process.env.INDEXER_LAG_WARN_LEDGERS ?? "50");
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const QUEUE_FAILED_THRESHOLD = Number(process.env.QUEUE_FAILED_THRESHOLD ?? "10");
@@ -153,7 +156,8 @@ router.get("/", async (_req: Request, res: Response) => {
     ["database", "horizon", "sorobanRpc", "indexer"] as const
   ).every((k) => body[k] !== "down");
 
-  res.status(isHealthy ? 200 : 503).json(body);
+  const status = isHealthy ? "healthy" : "degraded";
+  res.status(isHealthy ? 200 : 503).json({ ...body, status, ok: isHealthy });
 });
 
 router.get("/queues", async (_req: Request, res: Response) => {
