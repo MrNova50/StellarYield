@@ -5,12 +5,12 @@ import {
   validateSimulationResult,
 } from "../../shared/test-fixtures/simulatorFixtures";
 import {
-  simulateDeposit,
   simulateRebalance,
   validateRebalanceParams,
   REBALANCE_THRESHOLDS,
   type RebalanceParams,
 } from "../services/simulationService";
+import type { SimulationWarning } from "../../../shared/types/simulationWarning";
 
 describe("Simulation Service", () => {
   it("should estimate allocations, expected shares, fees, and explicitly mark as preview-only", () => {
@@ -36,7 +36,7 @@ describe("Simulation Service", () => {
       token: "USDC",
     });
 
-    expect(result.warnings).toContainEqual(expect.stringContaining("High slippage"));
+    expect(result.warnings.some((w: SimulationWarning) => w.code === "HIGH_SLIPPAGE")).toBe(true);
   });
 
   it("should return liquidity warnings for very high amounts", () => {
@@ -46,7 +46,7 @@ describe("Simulation Service", () => {
       token: "USDC",
     });
 
-    expect(result.warnings).toContainEqual(expect.stringContaining("Insufficient liquidity"));
+    expect(result.warnings.some((w: SimulationWarning) => w.code === "INSUFFICIENT_LIQUIDITY")).toBe(true);
   });
 
   it("should handle unsupported strategies", () => {
@@ -58,7 +58,7 @@ describe("Simulation Service", () => {
       token: "USDC",
     });
 
-    expect(result0.warnings).toContain("Amount must be greater than zero.");
+    expect(result0.warnings.some((w: SimulationWarning) => w.code === "ZERO_AMOUNT")).toBe(true);
   });
 });
 
@@ -234,9 +234,11 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings).toContain(
-        "High slippage expected for deposits over 100k."
-      );
+      const w = result.warnings.find((w: SimulationWarning) => w.code === "HIGH_SLIPPAGE");
+      expect(w).toBeDefined();
+      expect(w!.severity).toBe("warning");
+      expect(w!.affectedField).toBe("amount");
+      expect(w!.remediation).toBeTruthy();
     });
 
     it("should warn about insufficient liquidity for very large deposits (> 1M)", () => {
@@ -246,9 +248,10 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings).toContain(
-        "Insufficient liquidity to route this deposit fully."
-      );
+      const w = result.warnings.find((w: SimulationWarning) => w.code === "INSUFFICIENT_LIQUIDITY");
+      expect(w).toBeDefined();
+      expect(w!.severity).toBe("critical");
+      expect(w!.remediation).toBeTruthy();
     });
 
     it("should warn for zero amount deposits", () => {
@@ -258,7 +261,9 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings).toContain("Amount must be greater than zero.");
+      const w = result.warnings.find((w: SimulationWarning) => w.code === "ZERO_AMOUNT");
+      expect(w).toBeDefined();
+      expect(w!.severity).toBe("critical");
     });
 
     it("should warn for negative amount deposits", () => {
@@ -268,10 +273,11 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings).toContain("Amount must be greater than zero.");
+      const w = result.warnings.find((w: SimulationWarning) => w.code === "ZERO_AMOUNT");
+      expect(w).toBeDefined();
     });
 
-    it("should have no warnings for valid small deposits", () => {
+    it("should have no unexpected warnings for valid small deposits", () => {
       const result = simulateDeposit({
         strategyId: "blend-stable",
         amount: 5000,
@@ -279,11 +285,8 @@ describe("Simulation Service - Shared Fixture Tests", () => {
       });
 
       const unexpectedWarnings = result.warnings.filter(
-        (w) =>
-          !w.includes("slippage") &&
-          !w.includes("liquidity") &&
-          !w.includes("Amount") &&
-          !w.includes("Unsupported")
+        (w: SimulationWarning) =>
+          !["HIGH_SLIPPAGE", "INSUFFICIENT_LIQUIDITY", "ZERO_AMOUNT", "UNSUPPORTED_STRATEGY", "AMOUNT_TOO_LARGE"].includes(w.code)
       );
 
       expect(unexpectedWarnings.length).toBe(0);
@@ -320,7 +323,8 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings).toContain("Unsupported strategy or asset combination.");
+      const w = result.warnings.find((w: SimulationWarning) => w.code === "UNSUPPORTED_STRATEGY");
+      expect(w).toBeDefined();
       expect(result.allocations.length).toBeGreaterThan(0);
     });
   });
@@ -490,9 +494,15 @@ describe("Rebalance Simulation Sandbox", () => {
       ],
     });
 
-    expect(preview.warnings.some((w) => /High fees/.test(w))).toBe(true);
-    expect(preview.warnings.some((w) => /Stale data/.test(w))).toBe(true);
-    expect(preview.warnings.some((w) => /Liquidity risk/.test(w))).toBe(true);
+    expect(preview.warnings.some((w) => w.code === "HIGH_FEES")).toBe(true);
+    expect(preview.warnings.some((w) => w.code === "STALE_DATA")).toBe(true);
+    expect(preview.warnings.some((w) => w.code === "LIQUIDITY_RISK")).toBe(true);
+    // Each warning must have severity, message, and remediation
+    for (const w of preview.warnings) {
+      expect(w.severity).toMatch(/^(info|warning|critical)$/);
+      expect(typeof w.message).toBe("string");
+      expect(typeof w.remediation).toBe("string");
+    }
   });
 
   it("validates weights that do not sum to 100%", () => {
