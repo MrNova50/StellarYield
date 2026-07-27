@@ -2,41 +2,12 @@ use crate::{events, DataKey, VaultError, YieldVault};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{symbol_short, Address, Env, IntoVal, Val, Vec};
 
+#[soroban_sdk::contractimpl]
 impl YieldVault {
     /// Note: `emergency_pause` and `emergency_unpause` have moved to emergency.rs.
     /// They now support guardian authority, bounded durations, automatic expiry,
     /// and governance oversight. Use `YieldVault::emergency_pause(env, caller, duration)`
     /// and `YieldVault::emergency_unpause(env, caller)` instead.
-    /// Immediately pause all vault operations (deposit, withdraw, rebalance).
-    /// Callable only by admin.
-    pub fn emergency_pause(env: Env, admin: Address) -> Result<(), VaultError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &true);
-        // Use versioned event emission (#904)
-        events::emit_versioned_event(
-            &env,
-            symbol_short!("pause"),
-            events::ADMIN_ACTION_EVENT_V1.schema_version,
-            (admin,),
-        );
-        Ok(())
-    }
-
-    /// Resume vault operations after an emergency pause.
-    /// Callable only by admin.
-    pub fn emergency_unpause(env: Env, admin: Address) -> Result<(), VaultError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().remove(&DataKey::Paused);
-        // Use versioned event emission (#904)
-        events::emit_versioned_event(
-            &env,
-            symbol_short!("unpause"),
-            events::ADMIN_ACTION_EVENT_V1.schema_version,
-            (admin,),
-        );
-        Ok(())
-    }
-
     /// Rescue tokens sent to the contract by mistake.
     ///
     /// # Arguments
@@ -125,42 +96,14 @@ impl YieldVault {
         Err(VaultError::TimelockActive)
     }
 
-    /// View function to check if the vault is currently paused.
-    /// Delegates to emergency.rs implementation which handles automatic expiry
-    /// and guardian-based pause state.
-    pub fn is_paused(env: &Env) -> bool {
-        // Check legacy pause flag (DataKey::Paused) for backward compatibility
-        // and delegate to emergency.rs for the new timelocked pause system.
-        // The emergency module's is_paused handles automatic expiry.
-        let legacy_paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if legacy_paused {
-            return true;
-        }
-        // Check emergency module pause state (handles automatic expiry)
-        let pause_start: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseStart);
-        let pause_duration: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseDuration);
-        match (pause_start, pause_duration) {
-            (Some(start), Some(duration)) => {
-                let now = env.ledger().timestamp();
-                let elapsed = now.saturating_sub(start);
-                if elapsed >= duration {
-                    // Pause has expired - auto-cleanup
-                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseStart);
-                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseDuration);
-                    false
-                } else {
-                    true
-                }
-            }
-            _ => false,
-        }
-    }
+    // `is_paused` moved to emergency.rs (handles guardian-based pause state
+    // and automatic expiry); `DataKey::Paused` is no longer written anywhere
+    // now that `emergency_pause`/`emergency_unpause` above have moved too.
 }
 
+// Internal helper (takes `&Env`/`&Address`, not a valid contract entry-point
+// signature) — kept outside the `#[contractimpl]` block above.
+impl YieldVault {
     // ── Replay Protection for Admin Operations (#902) ───────────────────
     /// Verify and consume an admin operation intent with domain separation.
     ///
@@ -222,7 +165,10 @@ impl YieldVault {
 
         Ok(())
     }
+}
 
+#[soroban_sdk::contractimpl]
+impl YieldVault {
     // ── Cross-Contract Allowlist with Network Binding (#905) ──────────────
     /// Register an allowed contract for a given role on this network.
     ///
@@ -253,7 +199,10 @@ impl YieldVault {
         );
         Ok(())
     }
+}
 
+// Internal helper (takes `&Env`/`&Address`) — kept outside `#[contractimpl]`.
+impl YieldVault {
     /// Verify that a calling contract is allowed for the given role.
     ///
     /// # Arguments

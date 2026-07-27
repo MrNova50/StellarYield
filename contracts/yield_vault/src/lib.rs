@@ -46,7 +46,7 @@ use soroban_sdk::{
     Env, IntoVal, Symbol, Val,
 };
 #[path = "../../interfaces/vault_standard.rs"]
-mod vault_standard;
+pub mod vault_standard;
 use vault_standard::VaultStandard;
 
 // ── Storage keys ────────────────────────────────────────────────────────
@@ -840,6 +840,12 @@ impl YieldVault {
         YieldVault::get_total_referral_rewards_view(env)
     }
 
+    /// Check whether a referee's referral attribution is still within the
+    /// reward-earning window (see `REFERRAL_ATTRIBUTION_WINDOW_SECS`).
+    pub fn is_referral_attribution_active(env: Env, referee: Address) -> bool {
+        YieldVault::is_referral_attribution_active_view(env, referee)
+    }
+
     // ── Fee recipient admin ──────────────────────────────────────────
 
     /// Admin: update the address that receives protocol performance fees.
@@ -1045,7 +1051,7 @@ impl VaultStandard for YieldVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
     use soroban_sdk::{contract, contractimpl, Env, IntoVal};
 
     #[contract]
@@ -1454,6 +1460,87 @@ mod tests {
 
         let result = client.try_claim_referral_rewards(&referrer);
         assert!(result.is_err());
+    }
+
+    // ── Issue #989: attribution expiry and duplicate-claim coverage ─────────
+
+    #[test]
+    fn test_claim_referral_rewards_twice_second_call_fails() {
+        // Reject duplicate reward claims for the same qualifying action:
+        // once a reward has been claimed, claiming again with no new
+        // accrual in between must fail rather than paying out twice.
+        let (env, client, _, token_addr, token_admin) = setup_env();
+        let referee = Address::generate(&env);
+        let referrer = Address::generate(&env);
+
+        client.register_referral(&referee, &referrer);
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            YieldVault::accrue_referral_reward(&env, &referee, 10_000);
+        });
+        mint_tokens(&env, &token_addr, &token_admin, &contract_id, 1000);
+
+        let claimed = client.claim_referral_rewards(&referrer);
+        assert_eq!(claimed, 500);
+
+        // Second claim for the same (already-settled) accrual must fail.
+        let result = client.try_claim_referral_rewards(&referrer);
+        assert!(result.is_err(), "duplicate claim must be rejected");
+        assert_eq!(client.get_referral_rewards(&referrer), 0);
+    }
+
+    #[test]
+    fn test_accrue_referral_reward_valid_within_attribution_window() {
+        let (env, client, _, _, _) = setup_env();
+        let referee = Address::generate(&env);
+        let referrer = Address::generate(&env);
+
+        client.register_referral(&referee, &referrer);
+        assert!(client.is_referral_attribution_active(&referee));
+
+        // Advance time, but stay inside the attribution window.
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + referrals::REFERRAL_ATTRIBUTION_WINDOW_SECS - 1);
+        assert!(client.is_referral_attribution_active(&referee));
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            YieldVault::accrue_referral_reward(&env, &referee, 10_000);
+        });
+
+        assert_eq!(client.get_referral_rewards(&referrer), 500);
+        assert_eq!(client.get_total_referral_rewards(), 500);
+    }
+
+    #[test]
+    fn test_accrue_referral_reward_expired_attribution_pays_nothing() {
+        let (env, client, _, _, _) = setup_env();
+        let referee = Address::generate(&env);
+        let referrer = Address::generate(&env);
+
+        client.register_referral(&referee, &referrer);
+
+        // Advance time past the attribution window.
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + referrals::REFERRAL_ATTRIBUTION_WINDOW_SECS + 1);
+        assert!(!client.is_referral_attribution_active(&referee));
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            YieldVault::accrue_referral_reward(&env, &referee, 10_000);
+        });
+
+        // Expired attribution: no reward should have been paid to the referrer.
+        assert_eq!(client.get_referral_rewards(&referrer), 0);
+        assert_eq!(client.get_total_referral_rewards(), 0);
+    }
+
+    #[test]
+    fn test_is_referral_attribution_active_false_when_unregistered() {
+        let (env, client, _, _, _) = setup_env();
+        let referee = Address::generate(&env);
+        assert!(!client.is_referral_attribution_active(&referee));
     }
 
     #[test]

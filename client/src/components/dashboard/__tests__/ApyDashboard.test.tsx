@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ApyDashboard from "../ApyDashboard";
@@ -13,6 +13,10 @@ function createDeferredResponse() {
   });
   return { promise, resolve };
 }
+
+beforeEach(() => {
+  localStorage.clear();
+});
 
 describe("ApyDashboard states", () => {
   beforeEach(() => {
@@ -243,5 +247,173 @@ describe("ApyDashboard states", () => {
         name: /TVL sorted descending; activate to sort ascending/i,
       }),
     ).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("ApyDashboard offline/cache mode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    window.matchMedia = vi.fn().mockImplementation((query) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  function seedCache(data: unknown) {
+    const entry = {
+      data,
+      cachedAt: new Date(Date.now() - 120_000).toISOString(),
+      endpoint: "/api/yields",
+      ttl: 45 * 60 * 1000,
+    };
+    localStorage.setItem("stellaryield:api:/api/yields", JSON.stringify(entry));
+  }
+
+  it("shows cached data when fetch fails and cache exists", async () => {
+    const cachedData = [
+      {
+        protocol: "Blend",
+        asset: "USDC",
+        apy: 8.42,
+        tvl: 2450000,
+        risk: "Low",
+        change24h: 0.32,
+        rewardTokens: ["BLND"],
+        category: "Lending",
+      },
+    ];
+    seedCache(cachedData);
+
+    mockFetch.mockRejectedValue(new Error("Backend unavailable"));
+
+    render(<ApyDashboard />);
+
+    const blendLabels = await screen.findAllByText("Blend");
+    expect(blendLabels.length).toBeGreaterThan(0);
+    expect(screen.getByText("USDC")).toBeInTheDocument();
+    expect(screen.getByText("8.42")).toBeInTheDocument();
+  });
+
+  it("shows FreshnessBanner when serving from cache", async () => {
+    const cachedData = [
+      {
+        protocol: "Blend",
+        asset: "USDC",
+        apy: 8.42,
+        tvl: 2450000,
+        risk: "Low",
+        change24h: 0.32,
+        rewardTokens: ["BLND"],
+        category: "Lending",
+      },
+    ];
+    seedCache(cachedData);
+
+    mockFetch.mockRejectedValue(new Error("Backend unavailable"));
+
+    render(<ApyDashboard />);
+
+    expect(await screen.findByText("Showing Cached Data")).toBeInTheDocument();
+    expect(screen.getByText("Cached")).toBeInTheDocument();
+  });
+
+  it("cache banner refresh button re-fetches live data", async () => {
+    const user = userEvent.setup();
+    const cachedData = [
+      {
+        protocol: "Blend",
+        asset: "USDC",
+        apy: 8.42,
+        tvl: 2450000,
+        risk: "Low",
+        change24h: 0.32,
+        rewardTokens: ["BLND"],
+        category: "Lending",
+      },
+    ];
+    seedCache(cachedData);
+
+    mockFetch
+      .mockRejectedValueOnce(new Error("Backend unavailable"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          {
+            protocol: "Soroswap",
+            asset: "XLM-USDC",
+            apy: 14.75,
+            tvl: 3100000,
+            risk: "Medium",
+            change24h: 0.5,
+            rewardTokens: ["SOROSWAP"],
+            category: "DEX LP",
+          },
+        ],
+      });
+
+    render(<ApyDashboard />);
+
+    await screen.findByText("Showing Cached Data");
+    const blends = screen.getAllByText("Blend");
+    expect(blends.length).toBeGreaterThan(0);
+
+    await user.click(
+      screen.getByRole("button", { name: /refresh data from live api/i }),
+    );
+
+    const soroswapLabels = await screen.findAllByText("Soroswap");
+    expect(soroswapLabels.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.queryByText("Showing Cached Data")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows full error when no cache and no backend", async () => {
+    mockFetch.mockRejectedValue(new Error("Backend unavailable"));
+
+    render(<ApyDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to Load APY Data/i)).toBeInTheDocument();
+    }, { timeout: 5000 });
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
+  });
+
+  it("gracefully degrades when cache has stale data beyond hard threshold", async () => {
+    const cachedData = [
+      {
+        protocol: "Blend",
+        asset: "USDC",
+        apy: 8.42,
+        tvl: 2450000,
+        risk: "Low",
+        change24h: 0.32,
+        rewardTokens: ["BLND"],
+        category: "Lending",
+      },
+    ];
+    const entry = {
+      data: cachedData,
+      cachedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      endpoint: "/api/yields",
+      ttl: 120 * 60 * 1000,
+    };
+    localStorage.setItem("stellaryield:api:/api/yields", JSON.stringify(entry));
+
+    mockFetch.mockRejectedValue(new Error("Backend unavailable"));
+
+    render(<ApyDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Stale Cached Data")).toBeInTheDocument();
+    }, { timeout: 5000 });
+    expect(screen.getByText("Stale Cache")).toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import {
   setAuditContext,
   getAuditLogs,
@@ -6,6 +7,7 @@ import {
   exportAuditLogsToCSV,
   verifyAuditTrailIntegrity,
 } from "../middleware/audit";
+import { requireAdmin } from "../middleware/authz";
 import { uploadVaultMetadata } from "../services/ipfs/vaultMetadataService";
 import { freezeService } from "../services/freezeService";
 import { parsePaginationLimit, type PaginatedResponse } from "../types/pagination";
@@ -14,21 +16,24 @@ import { strategyStateTransitionAuditService } from "../services/strategyStateTr
 
 const adminRouter = Router();
 
-/**
- * Admin authentication middleware (implement based on your auth system)
- */
-function requireAdmin(req: Request, res: Response, next: () => void): void {
-  const user = (req as unknown as Record<string, unknown>).user as
-    | { role?: string }
-    | undefined;
+// #935 — sensitive admin mutations (fund/vault/access impacting) get a tight,
+// per-window burst limit with a clear 429 error response.
+const adminMutationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many admin requests. Please try again later." },
+});
 
-  if (!user || user.role !== "ADMIN") {
-    res.status(403).json({ error: "Unauthorized: Admin access required" });
-    return;
-  }
-
-  next();
-}
+// Read-only admin endpoints (audit log browsing/exports) get a looser limit.
+const adminReadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many admin requests. Please try again later." },
+});
 
 /**
  * Update vault parameters
@@ -36,6 +41,7 @@ function requireAdmin(req: Request, res: Response, next: () => void): void {
  */
 adminRouter.post(
   "/vaults/:vaultId/parameters",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -76,6 +82,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/vaults/:vaultId/metadata",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -143,6 +150,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/vaults/:vaultId/pause",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -179,6 +187,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/vaults/:vaultId/resume",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -213,6 +222,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/fees/config",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -249,6 +259,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/risk/parameters",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -285,6 +296,7 @@ adminRouter.post(
  */
 adminRouter.get(
   "/audit-logs",
+  adminReadLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -329,6 +341,7 @@ adminRouter.get(
  */
 adminRouter.get(
   "/audit-stats",
+  adminReadLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -355,6 +368,7 @@ adminRouter.get(
  */
 adminRouter.get(
   "/audit-logs/export",
+  adminReadLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -391,6 +405,7 @@ adminRouter.get(
  */
 adminRouter.get(
   "/audit-verify",
+  adminReadLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -423,6 +438,7 @@ adminRouter.get(
  */
 adminRouter.post(
   "/users/:userId/revoke-access",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -462,6 +478,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/users/:userId/grant-access",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -502,6 +519,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/recommendations/freeze",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -561,6 +579,7 @@ adminRouter.post(
  */
 adminRouter.post(
   "/recommendations/resume",
+  adminMutationLimiter,
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {

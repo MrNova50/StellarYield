@@ -6,6 +6,51 @@ import { logger } from '../utils/logger';
 import { KeeperSigner } from '../signer/KeeperSigner';
 import { QUEUE_NAMES, LiquidationJobData } from '../queues/types';
 
+/** Maximum age of the oracle price backing `currentCrBps` before it's considered stale. */
+export const MAX_PRICE_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+export type DryRunBlockReason = 'missing_oracle' | 'stale_price' | 'healthy_position';
+
+export type LiquidationDryRunResult =
+  | { safe: true }
+  | { safe: false; reason: DryRunBlockReason };
+
+/**
+ * Re-verify an undercollateralized job against unsafe-state fixtures before
+ * live submission. Called by `process()` immediately before invoking the
+ * on-chain `liquidate` transaction.
+ *
+ * Blocks (returns `safe: false`) when:
+ *  - `oracleAvailable === false` — no oracle price was confirmed at scan time.
+ *  - The price backing `currentCrBps` is older than `MAX_PRICE_AGE_MS`.
+ *  - `currentCrBps` is at or above the configured MCR (position healthy —
+ *    covers race conditions where the position recovered since the scan).
+ *
+ * A missing `priceTimestampMs` does not itself block; it means the caller
+ * didn't attach price provenance, so only the other two checks apply.
+ */
+export function evaluateLiquidationDryRun(
+  job: LiquidationJobData,
+  nowMs: number = Date.now(),
+): LiquidationDryRunResult {
+  if (job.oracleAvailable === false) {
+    return { safe: false, reason: 'missing_oracle' };
+  }
+
+  if (
+    typeof job.priceTimestampMs === 'number' &&
+    nowMs - job.priceTimestampMs > MAX_PRICE_AGE_MS
+  ) {
+    return { safe: false, reason: 'stale_price' };
+  }
+
+  if (job.currentCrBps >= config.keeper.mcrBps) {
+    return { safe: false, reason: 'healthy_position' };
+  }
+
+  return { safe: true };
+}
+
 /**
  * LiquidationWorker consumes jobs from the `liquidation` BullMQ queue and
  * executes on-chain liquidation transactions via the StablecoinManager contract.
@@ -57,6 +102,15 @@ export class LiquidationWorker {
       { jobId: job.id, accountAddress, crBps: job.data.currentCrBps },
       '[LiquidationWorker] Processing liquidation job',
     );
+
+    const dryRun = evaluateLiquidationDryRun(job.data);
+    if (!dryRun.safe) {
+      logger.warn(
+        { jobId: job.id, accountAddress, reason: dryRun.reason },
+        '[LiquidationWorker] Dry-run policy blocked liquidation',
+      );
+      throw new Error(`Liquidation blocked by dry-run policy: ${dryRun.reason}`);
+    }
 
     // Build Soroban args: (liquidator: Address, user: Address)
     const liquidatorScVal = new Address(this.signer.publicKey).toScVal();

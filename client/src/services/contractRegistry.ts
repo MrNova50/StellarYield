@@ -14,6 +14,26 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import registryJson from "../../../contracts/registry.json";
 
+// #936 — deployment manifest is generated post-deploy and may not exist in
+// every checkout (e.g. before a first deployment). Use an eager glob import
+// so a missing file resolves to an empty module map at build time instead
+// of failing the build.
+const manifestModules = import.meta.glob("../../../contracts/scripts/deployment-manifest.json", {
+  eager: true,
+}) as Record<string, { default: unknown }>;
+const deploymentManifest = Object.values(manifestModules)[0]?.default as
+  | {
+      network?: string;
+      contracts?: Record<string, string>;
+      provenance?: {
+        generatedBy?: string;
+        generatedAt?: string;
+        git?: { commitSha?: string };
+        network?: { name?: string; passphrase?: string };
+      };
+    }
+  | undefined;
+
 export type ContractName =
   | "vault"
   | "zap"
@@ -64,6 +84,72 @@ export function getContractId(
 
   const net = network ?? detectNetwork();
   return registry[net]?.[name] ?? "";
+}
+
+export interface RegistryProvenance {
+  available: boolean;
+  network?: string;
+  commitSha?: string;
+  generatedAt?: string;
+  networkPassphrase?: string;
+  generatedBy?: string;
+  issues: string[];
+}
+
+const MANIFEST_TO_REGISTRY: Partial<Record<string, ContractName>> = {
+  yield_vault: "vault",
+  strategies: "strategy",
+  optimistic_governance: "governance",
+  emission_controller: "emissionController",
+  liquid_staking: "liquidStaking",
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Report the deployment manifest's provenance for client-side diagnostics,
+ * so the frontend can prove which commit/network produced the contract
+ * addresses it is using, and detect tampering against registry.json.
+ */
+export function getRegistryProvenance(): RegistryProvenance {
+  if (!deploymentManifest) {
+    return { available: false, issues: ["deployment-manifest.json not found"] };
+  }
+
+  const provenance = deploymentManifest.provenance;
+  const issues: string[] = [];
+
+  if (!isNonEmptyString(provenance?.git?.commitSha)) issues.push("missing provenance.git.commitSha");
+  if (!isNonEmptyString(provenance?.network?.name)) issues.push("missing provenance.network.name");
+  if (!isNonEmptyString(provenance?.network?.passphrase)) issues.push("missing provenance.network.passphrase");
+  if (!isNonEmptyString(provenance?.generatedAt)) issues.push("missing provenance.generatedAt");
+  if (!isNonEmptyString(provenance?.generatedBy)) issues.push("missing provenance.generatedBy");
+
+  const network = deploymentManifest.network as NetworkName | undefined;
+  if (network && deploymentManifest.contracts) {
+    for (const [manifestKey, manifestAddr] of Object.entries(deploymentManifest.contracts)) {
+      if (!manifestAddr) continue;
+      const alias = MANIFEST_TO_REGISTRY[manifestKey] ?? (manifestKey as ContractName);
+      const registryAddr = (registryJson as any)[network]?.[alias];
+      if (registryAddr && registryAddr !== manifestAddr) {
+        issues.push(
+          `contract ID mismatch for "${manifestKey}": manifest has ${manifestAddr}, registry.json[${network}] has ${registryAddr}`,
+        );
+      }
+    }
+  }
+
+  return {
+    available: issues.length === 0,
+    network,
+    commitSha: provenance?.git?.commitSha,
+    generatedAt: provenance?.generatedAt,
+    networkPassphrase: provenance?.network?.passphrase,
+    generatedBy: provenance?.generatedBy,
+    issues,
+  };
 }
 
 export function getAllContractIds(network?: NetworkName): Record<ContractName, string> {

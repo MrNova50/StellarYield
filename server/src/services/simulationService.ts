@@ -32,6 +32,14 @@ export interface SimulationResult {
   warnings: string[];
 }
 
+/**
+ * Hard ceiling on a simulated deposit amount (issue #1053). Well above any
+ * realistic deposit, but finite enough that downstream percentage/blended-APY
+ * math (`amount * bps / sum`, chart axis scaling) can't overflow or render a
+ * misleading chart for a client-supplied extreme value.
+ */
+export const MAX_SIMULATION_DEPOSIT = 1_000_000_000;
+
 export function simulateDeposit(params: SimulationParams): SimulationResult {
   const { amount, strategyId, token: _token } = params;
 
@@ -46,8 +54,15 @@ export function simulateDeposit(params: SimulationParams): SimulationResult {
     warnings: [],
   };
 
-  if (amount <= 0) {
-    result.warnings.push("Amount must be greater than zero.");
+  if (!Number.isFinite(amount) || amount <= 0) {
+    result.warnings.push("Amount must be a finite number greater than zero.");
+    return result;
+  }
+
+  if (amount > MAX_SIMULATION_DEPOSIT) {
+    result.warnings.push(
+      `Amount exceeds the maximum supported simulation deposit of ${MAX_SIMULATION_DEPOSIT.toLocaleString()}.`,
+    );
     return result;
   }
 
@@ -189,6 +204,10 @@ export function validateRebalanceParams(params: RebalanceParams): string[] {
 
   if (!Number.isFinite(params.totalValueUsd) || params.totalValueUsd <= 0) {
     errors.push("totalValueUsd must be a positive number.");
+  } else if (params.totalValueUsd > MAX_SIMULATION_DEPOSIT) {
+    errors.push(
+      `totalValueUsd exceeds the maximum supported simulation value of ${MAX_SIMULATION_DEPOSIT.toLocaleString()}.`,
+    );
   }
 
   if (!Array.isArray(params.allocations) || params.allocations.length === 0) {
@@ -218,6 +237,15 @@ export function validateRebalanceParams(params: RebalanceParams): string[] {
           `${field} for ${alloc.label || "allocation"} must be between 0 and 100.`,
         );
       }
+    }
+    if (!Number.isFinite(alloc.apy) || alloc.apy < 0) {
+      errors.push(
+        `apy for ${alloc.label || "allocation"} must be a non-negative number (got ${alloc.apy}).`,
+      );
+    } else if (alloc.apy > 10_000) {
+      errors.push(
+        `apy for ${alloc.label || "allocation"} of ${alloc.apy}% is not a plausible assumption.`,
+      );
     }
     currentSum += alloc.currentWeight;
     targetSum += alloc.targetWeight;
