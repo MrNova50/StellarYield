@@ -1,5 +1,6 @@
-use crate::{DataKey, VaultError, YieldVault, YieldVaultArgs, YieldVaultClient};
-use soroban_sdk::{symbol_short, xdr::ToXdr, Address, Bytes, Env};
+use crate::{events, DataKey, VaultError, YieldVault};
+use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{symbol_short, Address, Env, IntoVal, Val, Vec};
 
 #[soroban_sdk::contractimpl]
 impl YieldVault {
@@ -139,18 +140,28 @@ impl YieldVault {
         let network = env.ledger().network_id();
         let contract = env.current_contract_address();
 
-        let preimage = (network, contract, operation_type, nonce, expiry_timestamp).to_xdr(env);
-        let op_hash: Bytes = env.crypto().sha256(&preimage).into();
+        let mut op_hash_input: Vec<Val> = Vec::new(env);
+        op_hash_input.push_back(network.into_val(env));
+        op_hash_input.push_back(contract.into_val(env));
+        op_hash_input.push_back(operation_type.into_val(env));
+        op_hash_input.push_back(nonce.into_val(env));
+        op_hash_input.push_back(expiry_timestamp.into_val(env));
+
+        let op_hash = env.crypto().sha256(&op_hash_input.to_xdr(env));
 
         // Check if already executed
-        if env.storage().instance().has(&DataKey::ExecutedAdminOp(op_hash.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ExecutedAdminOp(op_hash.clone().into()))
+        {
             return Err(VaultError::OperationReplayed);
         }
 
         // Mark as executed
         env.storage()
             .instance()
-            .set(&DataKey::ExecutedAdminOp(op_hash), &true);
+            .set(&DataKey::ExecutedAdminOp(op_hash.into()), &true);
 
         Ok(())
     }
@@ -212,5 +223,48 @@ impl YieldVault {
             Some(allowed_contract) if &allowed_contract == caller => Ok(()),
             _ => Err(VaultError::UnauthorizedContract),
         }
+    }
+
+    // ── Governance-Gated Storage Migrations (#896) ───────────────────
+
+    /// Returns the current storage schema version, defaulting to
+    /// [`crate::INITIAL_STORAGE_VERSION`] for vaults initialized before
+    /// this feature existed.
+    pub fn get_storage_version_impl(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::StorageVersion)
+            .unwrap_or(crate::INITIAL_STORAGE_VERSION)
+    }
+
+    /// Migrate storage to `to_version`. Admin-gated (governance authority).
+    /// Strictly sequential — rejects repeated, skipped, or out-of-order
+    /// migrations before mutating any state, and emits a versioned
+    /// `migrate` event carrying the old version, new version, and executor
+    /// for indexer audit trails.
+    pub fn migrate_storage_impl(
+        env: Env,
+        admin: Address,
+        to_version: u32,
+    ) -> Result<(), VaultError> {
+        Self::require_admin(&env, &admin)?;
+
+        let current_version = Self::get_storage_version_impl(&env);
+        if to_version != current_version + 1 {
+            return Err(VaultError::InvalidMigrationVersion);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &to_version);
+
+        events::emit_versioned_event(
+            &env,
+            symbol_short!("migrate"),
+            events::MIGRATION_EVENT_V1.schema_version,
+            (current_version, to_version, admin),
+        );
+
+        Ok(())
     }
 }
