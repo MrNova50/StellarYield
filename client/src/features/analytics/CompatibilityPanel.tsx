@@ -237,9 +237,9 @@ export default function CompatibilityPanel() {
       deposit: [], withdraw: [], rebalance: [], quote: [], reporting: [],
     };
     for (const issue of selectedProtocol.issues) {
-      const actions = (issue.affectedActions?.length ?? 0) > 0
+      const actions = ((issue.affectedActions?.length ?? 0) > 0
         ? issue.affectedActions
-        : (['deposit', 'withdraw', 'rebalance', 'quote', 'reporting'] as ActionType[]);
+        : ['deposit', 'withdraw', 'rebalance', 'quote', 'reporting']) as ActionType[];
       for (const a of actions) grouped[a].push(issue);
     }
     return (['deposit', 'withdraw', 'rebalance', 'quote', 'reporting'] as ActionType[])

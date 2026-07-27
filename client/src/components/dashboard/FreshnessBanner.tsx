@@ -161,7 +161,7 @@ export const FreshnessBanner: React.FC<FreshnessBannerProps> = ({
         >
           {isStale ? "Stale" : finalConfidence < 0.8 ? "Decayed" : "Fresh"}
         </span>
-        {onRefresh && source !== "cache" && (
+        {onRefresh && (source as string) !== "cache" && (
           <button
             onClick={onRefresh}
             className="btn-secondary inline-flex items-center gap-1.5 text-xs px-3 py-1.5"
