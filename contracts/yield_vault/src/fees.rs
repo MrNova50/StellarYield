@@ -1,4 +1,4 @@
-use crate::{VaultError, YieldVault, YieldVaultArgs, YieldVaultClient};
+use crate::{VaultError, YieldVault};
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 /// Storage keys for the dynamic fee system.
@@ -40,7 +40,6 @@ const DEFAULT_MAX_FEE_BPS: i128 = 1_000;
 /// Number of APY snapshots to consider for moving average.
 const MOVING_AVERAGE_WINDOW: u32 = 10;
 
-#[soroban_sdk::contractimpl]
 impl YieldVault {
     /// Record a new APY observation and recalculate the dynamic fee.
     /// Callable by admin.
@@ -152,11 +151,7 @@ impl YieldVault {
             .publish((symbol_short!("fee_bnd"),), (min_bps, max_bps));
         Ok(())
     }
-}
 
-// Internal helper (takes `&Env`, not a valid contract entry-point signature;
-// invoked from `harvest()`-style flows) — kept outside `#[contractimpl]`.
-impl YieldVault {
     /// Apply the performance fee to a harvest yield amount.
     /// Returns a tuple of (net_amount, fee_amount).
     ///
@@ -192,10 +187,7 @@ impl YieldVault {
 
         (net, fee)
     }
-}
 
-#[soroban_sdk::contractimpl]
-impl YieldVault {
     /// View: return the current performance fee in basis points.
     /// This fee is applied to harvest yields.
     pub fn get_performance_fee_bps(env: Env) -> i128 {
@@ -323,12 +315,6 @@ mod tests {
         (env, client, admin, token_addr, token_admin)
     }
 
-    /// `YieldVault::apply_performance_fee` reads instance storage (the
-    /// configured fee bps), so it must be invoked as the contract.
-    fn apply_performance_fee(env: &Env, contract_id: &Address, gross_amount: i128) -> (i128, i128) {
-        env.as_contract(contract_id, || YieldVault::apply_performance_fee(env, gross_amount))
-    }
-
     #[test]
     fn test_apply_performance_fee_rounding_dust() {
         let (env, client, admin, _, _) = setup_env();
@@ -340,19 +326,19 @@ mod tests {
 
         // Test with amounts that produce rounding dust
         // 100 * 123 / 10000 = 1.23 -> floor = 1
-        let (net, fee) = apply_performance_fee(&env, &client.address, 100);
+        let (net, fee) = YieldVault::apply_performance_fee(&env, 100);
         assert_eq!(fee, 1, "Fee should be floor(1.23) = 1");
         assert_eq!(net, 99, "Net should be 100 - 1 = 99");
         assert_eq!(net + fee, 100, "Invariant: net + fee == gross");
 
         // Test with larger amount: 10000 * 123 / 10000 = 123 (exact)
-        let (net, fee) = apply_performance_fee(&env, &client.address, 10_000);
+        let (net, fee) = YieldVault::apply_performance_fee(&env, 10_000);
         assert_eq!(fee, 123, "Fee should be exact 123");
         assert_eq!(net, 9_877, "Net should be 10000 - 123 = 9877");
         assert_eq!(net + fee, 10_000, "Invariant: net + fee == gross");
 
         // Test with very small amount: 1 * 123 / 10000 = 0 (floor)
-        let (net, fee) = apply_performance_fee(&env, &client.address, 1);
+        let (net, fee) = YieldVault::apply_performance_fee(&env, 1);
         assert_eq!(fee, 0, "Fee should be 0 for tiny amount");
         assert_eq!(net, 1, "Net should be 1");
         assert_eq!(net + fee, 1, "Invariant: net + fee == gross");
@@ -372,15 +358,11 @@ mod tests {
     #[test]
     fn test_apply_performance_fee_max_bps() {
         let (env, client, admin, _, _) = setup_env();
-        // Drive the active fee to 1000 bps: `set_fee_bounds` alone only
-        // changes the min/max clamp range, not the active `PerformanceFeeBps`
-        // — that's set by `record_apy_and_adjust_fee`'s clamped moving average.
-        client.record_apy_and_adjust_fee(&admin, &10_000);
         // Set max fee: 1000 bps (10%)
         client.set_fee_bounds(&admin, &1000, &1000);
 
         // 1000 * 1000 / 10000 = 100 (exact 10%)
-        let (net, fee) = apply_performance_fee(&env, &client.address, 1000);
+        let (net, fee) = YieldVault::apply_performance_fee(&env, 1000);
         assert_eq!(fee, 100);
         assert_eq!(net, 900);
         assert_eq!(net + fee, 1000);
@@ -393,7 +375,7 @@ mod tests {
         client.set_fee_bounds(&admin, &100, &100);
 
         // 1000 * 100 / 10000 = 10 (exact 1%)
-        let (net, fee) = apply_performance_fee(&env, &client.address, 1000);
+        let (net, fee) = YieldVault::apply_performance_fee(&env, 1000);
         assert_eq!(fee, 10);
         assert_eq!(net, 990);
         assert_eq!(net + fee, 1000);

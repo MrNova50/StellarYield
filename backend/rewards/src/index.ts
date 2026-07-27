@@ -5,7 +5,6 @@ export {
   hashPair,
   previewRewardClaim,
   findProofShapeError,
-  computeIdempotencyKey,
 } from "./merkleTree";
 export type {
   RewardEntry,

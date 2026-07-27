@@ -2,7 +2,10 @@ import { useState } from "react";
 import { Cpu, Loader2, LogOut, Wallet } from "lucide-react";
 import { useWallet } from "../../context/useWallet";
 import WalletConnectionModal from "./WalletConnectionModal";
-import AddressDisplay from "./AddressDisplay";
+
+function truncateKey(key: string) {
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
 
 export default function ConnectWalletButton() {
   const {
@@ -23,22 +26,15 @@ export default function ConnectWalletButton() {
         className="glass-card flex items-center gap-2 border-[#214fba]/20 px-4 py-2 transition-colors hover:border-red-500/40 text-slate-800 font-semibold text-sm"
         title="Disconnect wallet"
       >
-        <span className="h-2 w-2 rounded-full bg-green-500" aria-hidden="true" />
-        <span className="flex items-center gap-1">
+        <span className="h-2 w-2 rounded-full bg-green-500" />
+        <span>
           {providerLabel === "Freighter" ? "Freighter" : "Smart Wallet"}{" "}
-          <AddressDisplay
-            address={walletAddress}
-            label="Connected wallet"
-            showCopy={false}
-            prefixLength={4}
-            suffixLength={4}
-            className="inline"
-          />
+          {truncateKey(walletAddress)}
         </span>
         {walletAddressType === "contract" ? (
-          <Cpu size={14} className="text-[#214fba]" aria-label="Smart wallet" />
+          <Cpu size={14} className="text-[#214fba]" />
         ) : null}
-        <LogOut size={14} className="text-red-500" aria-hidden="true" />
+        <LogOut size={14} className="text-red-500" />
       </button>
     );
   }
@@ -52,9 +48,9 @@ export default function ConnectWalletButton() {
         disabled={isConnecting}
       >
         {isConnecting ? (
-          <Loader2 size={18} className="animate-spin" aria-hidden="true" />
+          <Loader2 size={18} className="animate-spin" />
         ) : (
-          <Wallet size={18} aria-hidden="true" />
+          <Wallet size={18} />
         )}
         {isConnecting ? "Connecting..." : "Connect Wallet"}
       </button>

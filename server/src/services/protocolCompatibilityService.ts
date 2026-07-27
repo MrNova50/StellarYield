@@ -1,10 +1,5 @@
 import NodeCache from "node-cache";
 import { freezeService } from "./freezeService";
-import {
-  scoreAdapterHealth,
-  deriveIssuesFromHealth,
-  type AdapterEvidence,
-} from "./adapterHealthService";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -108,34 +103,6 @@ const cache = new NodeCache({
   checkperiod: 60,
   useClones: false,
 });
-
-// ── Live adapter evidence registry (#937) ──────────────────────────────
-//
-// Keepers/adapters push freshness/latency/error-rate/schema evidence here.
-// When evidence exists for a protocol+component, compatibility issues are
-// derived from that live evidence instead of the mock feature/breaking-
-// change checks below, per the #937 acceptance criteria.
-
-const adapterEvidenceRegistry = new Map<string, AdapterEvidence>();
-
-function evidenceKey(protocolName: string, component: string): string {
-  return `${protocolName}::${component}`;
-}
-
-/** Register (or overwrite) live health evidence for a protocol adapter component. */
-export function registerAdapterEvidence(evidence: AdapterEvidence): void {
-  adapterEvidenceRegistry.set(evidenceKey(evidence.protocolName, evidence.component), evidence);
-}
-
-/** True when live adapter evidence has been registered for this protocol+component. */
-export function hasLiveAdapterEvidence(protocolName: string, component: string): boolean {
-  return adapterEvidenceRegistry.has(evidenceKey(protocolName, component));
-}
-
-/** Test-only: clear registered adapter evidence between test cases. */
-export function resetAdapterEvidenceRegistry(): void {
-  adapterEvidenceRegistry.clear();
-}
 
 function actionGroupStatus(issues: CompatibilityIssue[]): ActionGroup['status'] {
   if (issues.length === 0) return 'clear';
@@ -417,47 +384,30 @@ export class ProtocolCompatibilityEngine {
         });
       }
 
-      const evidence = adapterEvidenceRegistry.get(evidenceKey(protocolName, requirements.component));
+      // Critical features check
+      const featuresCheck = await this.checkCriticalFeatures(protocolName, requirements, currentVersion);
+      if (!featuresCheck.available) {
+        issues.push({
+          severity: 'critical',
+          component: requirements.component,
+          issue: 'Critical features unavailable',
+          impact: featuresCheck.missingFeatures.join(', ') + ' are not available',
+          recommendation: 'Upgrade protocol or use alternative implementation',
+          affectedStrategies: await this.getAffectedStrategies(protocolName, requirements.component),
+        });
+      }
 
-      if (evidence) {
-        // Live adapter evidence exists — derive issues from real freshness/
-        // latency/error-rate/schema data instead of the mock checks below.
-        const snapshot = scoreAdapterHealth(evidence);
-        const derived = deriveIssuesFromHealth(snapshot);
-        for (const d of derived) {
-          issues.push({
-            ...d,
-            affectedStrategies: await this.getAffectedStrategies(protocolName, requirements.component),
-          });
-        }
-      } else {
-        // No live adapter evidence registered — fall back to mock checks.
-
-        // Critical features check
-        const featuresCheck = await this.checkCriticalFeatures(protocolName, requirements, currentVersion);
-        if (!featuresCheck.available) {
-          issues.push({
-            severity: 'critical',
-            component: requirements.component,
-            issue: 'Critical features unavailable',
-            impact: featuresCheck.missingFeatures.join(', ') + ' are not available',
-            recommendation: 'Upgrade protocol or use alternative implementation',
-            affectedStrategies: await this.getAffectedStrategies(protocolName, requirements.component),
-          });
-        }
-
-        // Breaking changes check
-        const breakingChangesCheck = await this.checkBreakingChanges(protocolName, currentVersion.version, requirements);
-        if (breakingChangesCheck.hasBreakingChanges) {
-          issues.push({
-            severity: breakingChangesCheck.affectsCriticalPath ? 'critical' : 'high',
-            component: requirements.component,
-            issue: 'Breaking changes detected',
-            impact: breakingChangesCheck.changes.join(', '),
-            recommendation: 'Review and update integration code',
-            affectedStrategies: await this.getAffectedStrategies(protocolName, requirements.component),
-          });
-        }
+      // Breaking changes check
+      const breakingChangesCheck = await this.checkBreakingChanges(protocolName, currentVersion.version, requirements);
+      if (breakingChangesCheck.hasBreakingChanges) {
+        issues.push({
+          severity: breakingChangesCheck.affectsCriticalPath ? 'critical' : 'high',
+          component: requirements.component,
+          issue: 'Breaking changes detected',
+          impact: breakingChangesCheck.changes.join(', '),
+          recommendation: 'Review and update integration code',
+          affectedStrategies: await this.getAffectedStrategies(protocolName, requirements.component),
+        });
       }
 
     } catch (error) {

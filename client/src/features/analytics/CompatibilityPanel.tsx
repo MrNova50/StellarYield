@@ -501,16 +501,6 @@ export default function CompatibilityPanel() {
                 </span>
               </div>
             </div>
-
-            {/* Degraded/failing adapter evidence (#937) */}
-            {protocol.issues.some((i) => /adapter (degraded|unavailable)|schema mismatch/i.test(i.issue)) && (
-              <div className="mt-2 flex items-center gap-1.5 text-xs text-[#F5A623]">
-                <AlertTriangle size={12} />
-                <span>
-                  Adapter data degraded — compatibility confidence reduced
-                </span>
-              </div>
-            )}
           </div>
         ))}
       </div>

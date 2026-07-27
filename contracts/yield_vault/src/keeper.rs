@@ -1,4 +1,4 @@
-use crate::{VaultError, YieldVault, YieldVaultArgs, YieldVaultClient};
+use crate::{VaultError, YieldVault};
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 /// Storage keys specific to the keeper network.
@@ -23,7 +23,6 @@ const MAX_KEEPER_FEE_BPS_CAP: i128 = 200;
 /// Basis points denominator.
 const BPS_DENOMINATOR: i128 = 10_000;
 
-#[soroban_sdk::contractimpl]
 impl YieldVault {
     /// Register a new keeper node to the authorized list. Admin-only.
     ///
@@ -114,12 +113,7 @@ impl YieldVault {
             .publish((symbol_short!("kpr_fee"),), (fee_bps,));
         Ok(())
     }
-}
 
-// Internal helpers (take `&Env`/`&Address`, not valid contract entry-point
-// signatures; called internally from `harvest()`) — kept outside
-// `#[contractimpl]`.
-impl YieldVault {
     /// Check whether a given address is a registered and authorized keeper.
     pub fn is_registered_keeper(env: &Env, addr: &Address) -> bool {
         let keepers: Vec<Address> = env
@@ -151,10 +145,7 @@ impl YieldVault {
 
         (harvest_amount * fee_bps) / BPS_DENOMINATOR
     }
-}
 
-#[soroban_sdk::contractimpl]
-impl YieldVault {
     /// View: return the current amount of keeper fee in basis points.
     pub fn get_keeper_fee_bps(env: Env) -> i128 {
         env.storage()

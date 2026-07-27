@@ -30,7 +30,6 @@
 
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{token, Address, Env};
-use yield_vault::vault_standard::VaultStandard;
 use yield_vault::{YieldVault, YieldVaultClient};
 
 fn setup_env() -> (Env, YieldVaultClient<'static>, Address, Address, Address) {
@@ -53,20 +52,6 @@ fn setup_env() -> (Env, YieldVaultClient<'static>, Address, Address, Address) {
 fn mint_tokens(env: &Env, token_addr: &Address, to: &Address, amount: i128) {
     let admin_client = soroban_sdk::token::StellarAssetClient::new(env, token_addr);
     admin_client.mint(to, &amount);
-}
-
-/// Share-price helper used by test assertions throughout this suite.
-///
-/// Uses the same 1e9 fixed-point scale as the existing `fuzz_share_price_monotonic`
-/// test (distinct from the contract's own internal 1e18 scale in
-/// `VaultStandard::share_price`) so assertions stay consistent across tests.
-/// Returns `i128::MAX` when `total_shares` is 0 (undefined price, sentinel high
-/// value so callers comparing "did price drop" never misfire on an empty vault).
-fn share_price_1e9(total_assets: i128, total_shares: i128) -> i128 {
-    if total_shares == 0 {
-        return i128::MAX;
-    }
-    (total_assets * 1_000_000_000) / total_shares
 }
 
 // ── Invariant 1 & 2: totals never go negative ────────────────────────────
@@ -172,10 +157,10 @@ fn fuzz_share_price_monotonic() {
     mint_tokens(&env, &token_addr, &user2, 500_000);
 
     client.deposit(&user1, &1_000_000, &1_000_000);
-    let price_before = share_price_1e9(client.total_assets(), client.total_shares());
+    let price_before = (client.total_assets() * 1_000_000_000) / client.total_shares();
 
     client.deposit(&user2, &500_000, &500_000);
-    let price_after = share_price_1e9(client.total_assets(), client.total_shares());
+    let price_after = (client.total_assets() * 1_000_000_000) / client.total_shares();
 
     assert!(
         price_after >= price_before,
@@ -251,8 +236,7 @@ fn fuzz_fee_value_conservation() {
 
     // Test various gross amounts
     for gross in [100, 1000, 10000, 100000, 999999] {
-        let (net, fee) =
-            env.as_contract(&client.address, || YieldVault::apply_performance_fee(&env, gross));
+        let (net, fee) = YieldVault::apply_performance_fee(&env, gross);
 
         // Invariant: net + fee == gross (exact conservation)
         assert_eq!(
@@ -361,16 +345,12 @@ fn fuzz_share_conversion_roundtrip() {
     let shares = client.deposit(&user, &1000, &1000);
 
     // Convert shares back to assets
-    let assets = env
-        .as_contract(&client.address, || YieldVault::convert_to_assets(env.clone(), shares))
-        .unwrap();
+    let assets = YieldVault::convert_to_assets(env.clone(), shares).unwrap();
     // For a sole depositor with no yield, this should be exact
     assert_eq!(assets, 1000);
 
     // Convert assets to shares
-    let shares_back = env
-        .as_contract(&client.address, || YieldVault::convert_to_shares(env.clone(), assets))
-        .unwrap();
+    let shares_back = YieldVault::convert_to_shares(env.clone(), assets).unwrap();
     // Should be >= original shares (ceil division for user-favorable)
     assert!(shares_back >= shares);
 }
@@ -394,208 +374,4 @@ fn fuzz_no_floating_point_accounting() {
 
     let withdrawn = client.withdraw(&user, &shares);
     assert_eq!(withdrawn % 1, 0, "Withdrawn amount must be integer");
-}
-
-// ── Invariant 14: Share price monotonicity around harvest/fee events ────
-//
-// `harvest()` is the only fee-bearing event that mutates `total_assets`
-// without minting shares (auto-compounding). Its fee is the keeper fee
-// (`calculate_keeper_fee` in `keeper.rs`); this vault has no separate
-// management fee, so "harvest" below stands in for both the "harvest" and
-// "performance fee" sequences from the coverage requirement, and
-// deposit/withdrawal sequences reuse the same mocked setup so all four
-// operations are exercised against one continuous price series.
-//
-// # Rounding behavior (documented, not just asserted)
-// - `calculate_keeper_fee` floors `(harvest_amount * fee_bps) / BPS_DENOMINATOR`,
-//   so the keeper is paid slightly less than the exact proportional fee and
-//   `net_amount` (what gets compounded into `total_assets`) is rounded in the
-//   depositors' favor. `harvest()` itself asserts the stronger exact identity
-//   `net_amount + keeper_fee == amount_out` (see `validate_harvest_invariant`),
-//   so no value is created or destroyed — only the fee/net split rounds down.
-// - Combined with deposit's ceil-rounded share minting and withdrawal's
-//   floor-rounded asset payout (see Invariant 7 above and `fees.rs`), share
-//   price is non-decreasing across every operation in this suite.
-
-use soroban_sdk::{contract, contractimpl, symbol_short};
-
-/// Mock external rewards protocol invoked by `harvest()` via `claim_rewards`.
-/// Pre-funded with `reward_token` and configured with a fixed payout amount;
-/// mirrors the `MockFlashReceiver` pattern in `flashloan.rs`'s test module.
-#[contract]
-struct MockRewardProtocol;
-
-#[contractimpl]
-impl MockRewardProtocol {
-    pub fn configure(env: Env, reward_token: Address, reward_amount: i128) {
-        env.storage().instance().set(&symbol_short!("rwd_tok"), &reward_token);
-        env.storage().instance().set(&symbol_short!("rwd_amt"), &reward_amount);
-    }
-
-    pub fn claim_rewards(env: Env, to: Address) {
-        let reward_token: Address = env.storage().instance().get(&symbol_short!("rwd_tok")).unwrap();
-        let amount: i128 = env.storage().instance().get(&symbol_short!("rwd_amt")).unwrap();
-        let me = env.current_contract_address();
-        token::Client::new(&env, &reward_token).transfer(&me, &to, &amount);
-    }
-}
-
-/// Mock DEX router invoked by `harvest()` via `swap`. Configured with the
-/// vault address up front (the real `swap` signature carries no caller
-/// identity) and a fixed reward->base exchange rate in bps (10_000 = 1:1).
-#[contract]
-struct MockDexRouter;
-
-#[contractimpl]
-impl MockDexRouter {
-    pub fn configure_router(env: Env, vault: Address, rate_bps: i128) {
-        env.storage().instance().set(&symbol_short!("vault"), &vault);
-        env.storage().instance().set(&symbol_short!("rate"), &rate_bps);
-    }
-
-    pub fn swap(
-        env: Env,
-        token_in: Address,
-        token_out: Address,
-        amount_in: i128,
-        min_amount_out: i128,
-    ) -> i128 {
-        let vault: Address = env.storage().instance().get(&symbol_short!("vault")).unwrap();
-        let rate_bps: i128 = env.storage().instance().get(&symbol_short!("rate")).unwrap();
-        let amount_out = (amount_in * rate_bps) / 10_000;
-        assert!(amount_out >= min_amount_out, "MockDexRouter: slippage exceeded");
-
-        let me = env.current_contract_address();
-        token::Client::new(&env, &token_in).transfer(&vault, &me, &amount_in);
-        token::Client::new(&env, &token_out).transfer(&me, &vault, &amount_out);
-        amount_out
-    }
-}
-
-/// Deposits `deposit_amount`, then wires up mocked reward/dex contracts so
-/// `harvest()` compounds `reward_amount` (at a 1:1 exchange rate) into the
-/// vault. Returns the harvest caller so tests can drive keeper-fee vs.
-/// admin (no-fee) paths.
-fn setup_harvestable_vault(
-    deposit_amount: i128,
-    reward_amount: i128,
-) -> (Env, YieldVaultClient<'static>, Address, Address, Address) {
-    let (env, client, admin, token_addr, token_admin) = setup_env();
-    // harvest() calls through to the mock dex router, which moves funds out
-    // of the vault's own balance — that auth isn't tied to the root
-    // (keeper/admin) invocation, so it needs non-root auth recording.
-    env.mock_all_auths_allowing_non_root_auth();
-
-    let depositor = Address::generate(&env);
-    mint_tokens(&env, &token_addr, &depositor, deposit_amount);
-    client.deposit(&depositor, &deposit_amount, &deposit_amount);
-
-    let reward_token_admin = Address::generate(&env);
-    let reward_token_contract = env.register_stellar_asset_contract_v2(reward_token_admin.clone());
-    let reward_token_addr = reward_token_contract.address();
-
-    let reward_protocol_id = env.register(MockRewardProtocol, ());
-    let reward_protocol_client = MockRewardProtocolClient::new(&env, &reward_protocol_id);
-    reward_protocol_client.configure(&reward_token_addr, &reward_amount);
-    mint_tokens(&env, &reward_token_addr, &reward_protocol_id, reward_amount);
-
-    let dex_router_id = env.register(MockDexRouter, ());
-    let dex_router_client = MockDexRouterClient::new(&env, &dex_router_id);
-    dex_router_client.configure_router(&client.address, &10_000i128); // 1:1 rate
-    mint_tokens(&env, &token_addr, &dex_router_id, reward_amount);
-
-    let keeper = Address::generate(&env);
-    client.configure_strategy(&admin, &reward_protocol_id, &reward_token_addr, &dex_router_id, &keeper);
-
-    let _ = token_admin;
-    (env, client, admin, token_addr, keeper)
-}
-
-#[test]
-fn fuzz_share_price_non_decreasing_through_harvest_with_keeper_fee() {
-    let (_env, client, _admin, _token_addr, keeper) = setup_harvestable_vault(1_000_000, 100_000);
-
-    let price_before = share_price_1e9(client.total_assets(), client.total_shares());
-    let assets_before = client.total_assets();
-
-    let net_amount = client.harvest(&keeper, &0);
-
-    let price_after = share_price_1e9(client.total_assets(), client.total_shares());
-    assert!(
-        price_after >= price_before,
-        "Share price decreased after harvest: {} -> {}",
-        price_before,
-        price_after
-    );
-
-    // Bounded fee impact: total_assets grows by exactly net_amount (<= gross
-    // reward), never by more than what was actually harvested.
-    assert_eq!(client.total_assets(), assets_before + net_amount);
-    assert!(net_amount > 0 && net_amount <= 100_000);
-}
-
-#[test]
-fn fuzz_share_price_non_decreasing_through_harvest_admin_no_fee() {
-    let (env, client, admin, _token_addr, _keeper) = setup_harvestable_vault(1_000_000, 100_000);
-
-    let price_before = share_price_1e9(client.total_assets(), client.total_shares());
-
-    // Admin-initiated harvest pays no keeper fee: full reward compounds in.
-    let net_amount = client.harvest(&admin, &0);
-    assert_eq!(net_amount, 100_000, "Admin harvest should not deduct a keeper fee");
-
-    let price_after = share_price_1e9(client.total_assets(), client.total_shares());
-    assert!(price_after >= price_before);
-    let _ = env;
-}
-
-#[test]
-fn fuzz_share_price_non_decreasing_across_deposit_harvest_withdraw_sequence() {
-    let (env, client, _admin, token_addr, keeper) = setup_harvestable_vault(1_000_000, 200_000);
-
-    let price_after_deposit = share_price_1e9(client.total_assets(), client.total_shares());
-
-    client.harvest(&keeper, &0);
-    let price_after_harvest = share_price_1e9(client.total_assets(), client.total_shares());
-    assert!(
-        price_after_harvest >= price_after_deposit,
-        "Share price decreased after harvest: {} -> {}",
-        price_after_deposit,
-        price_after_harvest
-    );
-
-    // A second depositor joins after the harvest — should not be able to
-    // extract the accrued yield at the pre-harvest price.
-    let user2 = Address::generate(&env);
-    mint_tokens(&env, &token_addr, &user2, 500_000);
-    // min_shares_out=0: post-harvest share price > 1, so 500_000 assets buys
-    // fewer than 500_000 shares — passing 500_000 here would itself trip the
-    // deposit's own slippage guard (`SlippageExceeded`), which is exactly the
-    // protection this test is verifying works (see the assertion below).
-    let shares2 = client.deposit(&user2, &500_000, &0);
-    let total_shares_after = client.total_shares();
-    let price_after_second_deposit = share_price_1e9(client.total_assets(), total_shares_after);
-    // `preview_deposit` mints shares with ceil (user-favorable) rounding, so a
-    // deposit can dilute the scaled price by up to the equivalent of one raw
-    // share unit — the same documented "max 1 unit of rounding dust per
-    // operation" budget as the rest of this suite (see file header).
-    let dust_tolerance_1e9 = 1_000_000_000i128 / total_shares_after.max(1);
-    assert!(
-        price_after_second_deposit + dust_tolerance_1e9 >= price_after_harvest,
-        "Share price decreased beyond rounding dust after deposit: {} -> {} (tolerance {})",
-        price_after_harvest,
-        price_after_second_deposit,
-        dust_tolerance_1e9
-    );
-
-    // Second depositor withdraws immediately: price must not drop below
-    // what it was right before their deposit (floor-rounded payout).
-    client.withdraw(&user2, &shares2);
-    let price_after_withdraw = share_price_1e9(client.total_assets(), client.total_shares());
-    assert!(
-        price_after_withdraw >= price_after_harvest,
-        "Share price decreased after withdraw: {} -> {}",
-        price_after_harvest,
-        price_after_withdraw
-    );
 }

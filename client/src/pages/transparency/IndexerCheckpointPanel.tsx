@@ -8,9 +8,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Database, RefreshCw, AlertTriangle, WifiOff } from "lucide-react";
+import { Database, RefreshCw, AlertTriangle } from "lucide-react";
 import StatusBadge from "../../components/StatusBadge";
-import { apiUrl, isApiUnavailableError } from "../../lib/api";
+import { apiUrl } from "../../lib/api";
 import {
   getIndexerStatusDisplay,
   formatLag,
@@ -22,13 +22,11 @@ export default function IndexerCheckpointPanel() {
   const [status, setStatus] = useState<IndexerStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isUnavailable, setIsUnavailable] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      setIsUnavailable(false);
       const res = await fetch(apiUrl("/api/indexer/status"));
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -36,12 +34,8 @@ export default function IndexerCheckpointPanel() {
       const body = await res.json();
       setStatus(body.data as IndexerStatus);
     } catch (err) {
-      if (isApiUnavailableError(err)) {
-        setIsUnavailable(true);
-      } else {
-        console.error("Failed to fetch indexer status:", err);
-        setError(err instanceof Error ? err.message : "Failed to fetch indexer status");
-      }
+      console.error("Failed to fetch indexer status:", err);
+      setError(err instanceof Error ? err.message : "Failed to fetch indexer status");
     } finally {
       setIsLoading(false);
     }
@@ -72,27 +66,18 @@ export default function IndexerCheckpointPanel() {
         </button>
       </div>
 
-      {isUnavailable && (
-        <div className="flex items-center gap-2 p-3 bg-gray-500/10 border border-gray-500/30 rounded-lg">
-          <WifiOff className="w-5 h-5 text-gray-400" />
-          <span className="text-sm text-gray-400">
-            Backend unavailable — configure <code>VITE_API_BASE_URL</code> to enable live indexer data.
-          </span>
-        </div>
-      )}
-
-      {error && !isUnavailable && (
+      {error && (
         <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
           <AlertTriangle className="w-5 h-5 text-red-500" />
           <span className="text-sm text-red-400">{error}</span>
         </div>
       )}
 
-      {!error && !isUnavailable && isLoading && !status && (
+      {!error && isLoading && !status && (
         <p className="text-sm text-gray-400">Loading indexer status…</p>
       )}
 
-      {!isUnavailable && status && display && (
+      {status && display && (
         <>
           <div className="flex flex-wrap items-center gap-3">
             <StatusBadge variant={display.variant} label={display.label} />

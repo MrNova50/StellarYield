@@ -815,14 +815,6 @@ body {
   }
 }
 
-.scrollbar-hide {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
-
 .app-nav {
   color: #10233f;
   min-height: 3.4rem;

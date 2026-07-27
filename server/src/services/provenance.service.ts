@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client';
-import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -12,11 +11,11 @@ export interface AllocationProvenance {
   vaultId: string;         // Target Vault
   strategyVersion: string; // Current strategy logic version
   timestamp: number;       // ISO or Unix timestamp for time-window lookups
-
+  
   // Input triggers (e.g., APY changes, Liquidity shifts)
   triggerContext: {
     condition: string;     // e.g., "MARKET_VOLATILITY_THRESHOLD"
-    rawInputs: Record<string, number>;
+    rawInputs: Record<string, number>; 
   };
 
   // The actual change made
@@ -26,31 +25,12 @@ export interface AllocationProvenance {
   };
 
   signer: string;          // Wallet address that triggered/signed the change
-  sourceSnapshotHash?: string; // SHA-256 hash of source data for audit trail
-}
-
-/**
- * Calculate stable SHA-256 hash of source data
- * Ensures consistent hashing regardless of JSON serialization order
- */
-export function calculateSourceHash(sourceData: Record<string, unknown>): string {
-  // Sort keys for deterministic ordering
-  const sorted = Object.keys(sourceData)
-    .sort()
-    .reduce((acc, key) => {
-      acc[key] = sourceData[key];
-      return acc;
-    }, {} as Record<string, unknown>);
-
-  const jsonString = JSON.stringify(sorted);
-  return crypto.createHash('sha256').update(jsonString).digest('hex');
 }
 
 export class ProvenanceService {
   /**
    * Saves an allocation decision to the database.
    * Implements immutability by preventing overrides of existing decision IDs.
-   * Automatically generates sourceSnapshotHash if not provided.
    */
   async saveDecision(provenance: AllocationProvenance): Promise<AllocationProvenance> {
     const existing = await prisma.allocationProvenance.findUnique({
@@ -60,12 +40,6 @@ export class ProvenanceService {
     if (existing) {
       throw new Error(`Allocation record with decisionId ${provenance.decisionId} already exists and is immutable.`);
     }
-
-    // Generate hash from source data if not provided
-    const sourceSnapshotHash = provenance.sourceSnapshotHash || calculateSourceHash({
-      ...provenance.triggerContext.rawInputs,
-      timestamp: provenance.timestamp,
-    });
 
     const created = await prisma.allocationProvenance.create({
       data: {
@@ -78,7 +52,6 @@ export class ProvenanceService {
         previousAllocation: provenance.allocationChange.previous,
         updatedAllocation: provenance.allocationChange.updated,
         signer: provenance.signer,
-        sourceSnapshotHash,
       },
     });
 
@@ -126,7 +99,6 @@ export class ProvenanceService {
         updated: record.updatedAllocation as Record<string, number>,
       },
       signer: record.signer,
-      sourceSnapshotHash: record.sourceSnapshotHash,
     };
   }
 }

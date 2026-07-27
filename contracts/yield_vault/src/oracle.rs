@@ -1,4 +1,4 @@
-use crate::{DataKey, VaultError, YieldVault, YieldVaultArgs, YieldVaultClient};
+use crate::{DataKey, VaultError, YieldVault};
 use soroban_sdk::{contractclient, contracttype, Address, Env, Vec};
 
 #[contractclient(name = "OracleClient")]
@@ -15,19 +15,13 @@ pub struct PricePoint {
     pub confidence: u32, // 0-100: confidence score based on sample quality and age
 }
 
-#[soroban_sdk::contractimpl]
 impl YieldVault {
     pub fn set_oracle(env: Env, admin: Address, oracle: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         Ok(())
     }
-}
 
-// Internal helpers (take `&Env`, not a valid contract entry-point signature;
-// called internally from deposit/withdraw/harvest flows) — kept outside
-// `#[contractimpl]`.
-impl YieldVault {
     /// Fetches the current price from the oracle, or calculates TWAP if stale.
     /// Returns (price, confidence_score, is_fallback).
     pub fn get_secure_price_with_metadata(env: &Env) -> Result<(i128, u32, bool), VaultError> {

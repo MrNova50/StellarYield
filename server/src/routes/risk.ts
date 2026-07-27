@@ -1,12 +1,8 @@
 import { Router, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
-import { PrismaClient } from "@prisma/client";
-import { RiskPreferenceDriftService, riskPreferenceDriftService, type RiskPreference, type UserRiskProfile, type PortfolioBehavior } from "../services/riskPreferenceDriftService";
+import { riskPreferenceDriftService, type RiskPreference, type UserRiskProfile, type PortfolioBehavior } from "../services/riskPreferenceDriftService";
 import { stressMatrixService } from "../services/stressMatrixService";
 import { apyDispersionService, type ProviderApyInput } from "../services/apyDispersionService";
-import { requireAdmin } from "../middleware/authz";
-
-const prisma = new PrismaClient();
 
 const router = Router();
 
@@ -40,7 +36,7 @@ const VALID_PREFERENCES: RiskPreference[] = ["conservative", "balanced", "aggres
  * POST /api/risk/drift/detect
  * Detect risk preference drift for a user's portfolio.
  */
-router.post("/drift/detect", riskAnalysisLimiter, async (req: Request, res: Response) => {
+router.post("/drift/detect", riskAnalysisLimiter, (req: Request, res: Response) => {
   try {
     const { userId, statedPreference, positions } = req.body as {
       userId?: string;
@@ -78,8 +74,7 @@ router.post("/drift/detect", riskAnalysisLimiter, async (req: Request, res: Resp
       positions,
     };
 
-    const svc = new RiskPreferenceDriftService(prisma);
-    const result = await svc.detectDrift(profile, behavior);
+    const result = riskPreferenceDriftService.detectDrift(profile, behavior);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({
@@ -153,7 +148,7 @@ router.get("/dispersion/config", (_req: Request, res: Response) => {
  * POST /api/risk/dispersion/config
  * Update dispersion configuration.
  */
-router.post("/dispersion/config", scenarioMutationLimiter, requireAdmin, (req: Request, res: Response) => {
+router.post("/dispersion/config", (req: Request, res: Response) => {
   try {
     const config = req.body;
     apyDispersionService.updateConfig(config);
@@ -194,7 +189,7 @@ router.get("/stress-matrix/scenarios", (_req: Request, res: Response) => {
  * POST /api/risk/stress-matrix/scenarios
  * Add a custom stress scenario.
  */
-router.post("/stress-matrix/scenarios", scenarioMutationLimiter, requireAdmin, (req: Request, res: Response) => {
+router.post("/stress-matrix/scenarios", scenarioMutationLimiter, (req: Request, res: Response) => {
   try {
     const scenario = req.body;
     if (!scenario.id || !scenario.name || !scenario.factors) {
@@ -215,7 +210,7 @@ router.post("/stress-matrix/scenarios", scenarioMutationLimiter, requireAdmin, (
  * DELETE /api/risk/stress-matrix/scenarios/:scenarioId
  * Remove a stress scenario.
  */
-router.delete("/stress-matrix/scenarios/:scenarioId", scenarioMutationLimiter, requireAdmin, (req: Request, res: Response) => {
+router.delete("/stress-matrix/scenarios/:scenarioId", (req: Request, res: Response) => {
   const { scenarioId } = req.params;
   const removed = stressMatrixService.removeScenario(scenarioId);
 
@@ -225,64 +220,6 @@ router.delete("/stress-matrix/scenarios/:scenarioId", scenarioMutationLimiter, r
   }
 
   res.json({ success: true, message: `Scenario ${scenarioId} removed` });
-});
-
-/**
- * POST /api/risk/drift/reset
- * Reset risk preference drift with a recorded reason.
- */
-router.post("/drift/reset", riskAnalysisLimiter, async (req: Request, res: Response) => {
-  try {
-    const { userId, statedPreference, reason } = req.body as {
-      userId?: string;
-      statedPreference?: string;
-      reason?: string;
-    };
-
-    if (!userId) {
-      res.status(400).json({ error: "userId is required" });
-      return;
-    }
-
-    if (!statedPreference || !VALID_PREFERENCES.includes(statedPreference as RiskPreference)) {
-      res.status(400).json({ error: `statedPreference must be one of: ${VALID_PREFERENCES.join(", ")}` });
-      return;
-    }
-
-    if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
-      res.status(400).json({ error: "reason is required" });
-      return;
-    }
-
-    const svc = new RiskPreferenceDriftService(prisma);
-    const snapshot = await svc.resetDrift(userId, statedPreference as RiskPreference, reason.trim());
-    res.json({ success: true, data: snapshot });
-  } catch (error) {
-    res.status(500).json({
-      error: "Failed to reset risk preference drift",
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
-
-/**
- * GET /api/risk/drift/history/:userId
- * Get recent drift history for a user.
- */
-router.get("/drift/history/:userId", async (req: Request, res: Response) => {
-  try {
-    const { userId } = req.params;
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 10, 1), 100);
-
-    const svc = new RiskPreferenceDriftService(prisma);
-    const history = await svc.getDriftHistory(userId, limit);
-    res.json({ success: true, data: history });
-  } catch (error) {
-    res.status(500).json({
-      error: "Failed to fetch drift history",
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
 });
 
 export default router;
