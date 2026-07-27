@@ -1,4 +1,4 @@
-import { LiquidationWorker } from '../workers/LiquidationWorker';
+import { LiquidationWorker, evaluateLiquidationDryRun, MAX_PRICE_AGE_MS } from '../workers/LiquidationWorker';
 import { KeeperSigner } from '../signer/KeeperSigner';
 import { Job } from 'bullmq';
 import { LiquidationJobData } from '../queues/types';
@@ -105,6 +105,94 @@ describe('LiquidationWorker', () => {
     await expect(
       worker.process({ id: 'job-liq-5', data: sampleJobData, attemptsMade: 0 } as Job<LiquidationJobData>),
     ).rejects.toThrow('Contract reverted: liquidation error');
+  });
+
+  // ── Dry-run policy fixtures (issue #986) ────────────────────────────────
+  // Deterministic job-data fixtures covering the unsafe-collateral states
+  // the dry-run policy must classify before a liquidation is ever submitted.
+  const dryRunFixtures = {
+    underCollateralized: {
+      ...sampleJobData,
+      currentCrBps: 9_500, // below MCR_BPS (11_000) — eligible
+      priceTimestampMs: Date.now(),
+      oracleAvailable: true,
+    } satisfies LiquidationJobData,
+    healthy: {
+      ...sampleJobData,
+      currentCrBps: 12_000, // at/above MCR_BPS — not eligible
+      priceTimestampMs: Date.now(),
+      oracleAvailable: true,
+    } satisfies LiquidationJobData,
+    stalePrice: {
+      ...sampleJobData,
+      currentCrBps: 9_500,
+      priceTimestampMs: Date.now() - (MAX_PRICE_AGE_MS + 1_000),
+      oracleAvailable: true,
+    } satisfies LiquidationJobData,
+    missingOracle: {
+      ...sampleJobData,
+      currentCrBps: 9_500,
+      priceTimestampMs: Date.now(),
+      oracleAvailable: false,
+    } satisfies LiquidationJobData,
+  };
+
+  describe('evaluateLiquidationDryRun()', () => {
+    test('under-collateralized state with a fresh oracle price is safe', () => {
+      const result = evaluateLiquidationDryRun(dryRunFixtures.underCollateralized);
+      expect(result.safe).toBe(true);
+    });
+
+    test('healthy position (CR >= MCR) is blocked', () => {
+      const result = evaluateLiquidationDryRun(dryRunFixtures.healthy);
+      expect(result).toEqual({ safe: false, reason: 'healthy_position' });
+    });
+
+    test('stale oracle price is blocked even when under-collateralized', () => {
+      const result = evaluateLiquidationDryRun(dryRunFixtures.stalePrice);
+      expect(result).toEqual({ safe: false, reason: 'stale_price' });
+    });
+
+    test('missing oracle is blocked regardless of CR', () => {
+      const result = evaluateLiquidationDryRun(dryRunFixtures.missingOracle);
+      expect(result).toEqual({ safe: false, reason: 'missing_oracle' });
+    });
+
+    test('missing priceTimestampMs does not itself block (no provenance attached)', () => {
+      const { priceTimestampMs, ...rest } = dryRunFixtures.underCollateralized;
+      const result = evaluateLiquidationDryRun(rest as LiquidationJobData);
+      expect(result.safe).toBe(true);
+    });
+  });
+
+  test('process() submits the liquidation for an under-collateralized fixture', async () => {
+    const mockJob = { id: '4', data: dryRunFixtures.underCollateralized } as Job<LiquidationJobData>;
+
+    const result = await worker.process(mockJob);
+
+    expect(mockSigner.invokeContract).toHaveBeenCalled();
+    expect(result).toEqual({ txHash: 'TX_HASH_ABC123' });
+  });
+
+  test('process() blocks live submission for a healthy position and never calls invokeContract', async () => {
+    const mockJob = { id: '5', data: dryRunFixtures.healthy } as Job<LiquidationJobData>;
+
+    await expect(worker.process(mockJob)).rejects.toThrow('Liquidation blocked by dry-run policy: healthy_position');
+    expect(mockSigner.invokeContract).not.toHaveBeenCalled();
+  });
+
+  test('process() blocks live submission for a stale price and never calls invokeContract', async () => {
+    const mockJob = { id: '6', data: dryRunFixtures.stalePrice } as Job<LiquidationJobData>;
+
+    await expect(worker.process(mockJob)).rejects.toThrow('Liquidation blocked by dry-run policy: stale_price');
+    expect(mockSigner.invokeContract).not.toHaveBeenCalled();
+  });
+
+  test('process() blocks live submission for a missing oracle and never calls invokeContract', async () => {
+    const mockJob = { id: '7', data: dryRunFixtures.missingOracle } as Job<LiquidationJobData>;
+
+    await expect(worker.process(mockJob)).rejects.toThrow('Liquidation blocked by dry-run policy: missing_oracle');
+    expect(mockSigner.invokeContract).not.toHaveBeenCalled();
   });
 
   test('close() closes the underlying BullMQ worker', async () => {

@@ -210,6 +210,19 @@ model DriftEvent {
   @@index([vaultId, isRecovered])
 }
 
+model RiskPreferenceDriftSnapshot {
+  id               String   @id @default(uuid())
+  userId           String
+  statedPreference String   // conservative, balanced, aggressive
+  overallDriftPct  Float
+  isDrifting       Boolean
+  dimensionData    String   // JSON string of DriftDimension array
+  reason           String   // "auto_detected" or custom reset reason
+  createdAt        DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
 // ── Rebalance Queue Models (Issue #281) ─────────────────────────────────────────
 
 model RebalanceQueueEntry {
@@ -607,4 +620,24 @@ model ProjectionAuditLog {
   @@index([projectionVersionId])
   @@index([vaultId, auditType, auditedAt])
   @@index([hasDrift, auditedAt])
+}
+
+// ── Reward Claim Models (Issue #996) ──────────────────────────────────────────
+
+model RewardClaim {
+  id               String   @id @default(uuid())
+  idempotencyKey   String   @unique
+  epoch            Int
+  claimant         String
+  amount           String
+  merkleRoot       String
+  index            Int
+  status           String   @default("pending") // pending, submitted, confirmed, failed
+  txHash           String?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([claimant, status])
+  @@index([epoch, status])
 }

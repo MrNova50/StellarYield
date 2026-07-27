@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
 import {
   buildTaxLotPreview,
@@ -9,6 +9,10 @@ import {
 } from "../services/export";
 import { sendError } from "../utils/errorResponse";
 import { validateWalletAddress } from "../middleware/validation";
+import {
+  validateExportParams,
+  type ExportValidationResult,
+} from "../services/portfolio/exportValidation";
 
 type ExportPrismaClient = {
   userTransaction: {
@@ -54,6 +58,40 @@ const exportLimiter = rateLimit({
   max: 5,
   message: "Too many export requests. Please try again later.",
 });
+
+/**
+ * Middleware: validate export query parameters (date windows, asset filters,
+ * and output format) before the handler runs any DB work.
+ *
+ * On success the parsed, normalised values are attached to `res.locals.exportParams`
+ * so handlers can read them without re-parsing.
+ */
+function validateExportQuery(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const result: ExportValidationResult = validateExportParams({
+    startDate: req.query.startDate as string | undefined,
+    endDate: req.query.endDate as string | undefined,
+    assets: req.query.assets as string | undefined,
+    format: req.query.format as string | undefined,
+  });
+
+  if (!result.valid) {
+    sendError(
+      res,
+      400,
+      "INVALID_EXPORT_PARAMS",
+      "One or more export parameters are invalid.",
+      result.errors,
+    );
+    return;
+  }
+
+  res.locals.exportParams = result.parsed;
+  next();
+}
 
 async function fetchRawTransactions(
   address: string,
@@ -115,15 +153,23 @@ exportRouter.get(
   "/:address/export/preview",
   exportLimiter,
   validateWalletAddress,
+  validateExportQuery,
   async (req: Request, res: Response) => {
     const { address } = req.params;
+    const { assets } = res.locals.exportParams as {
+      assets: string[] | undefined;
+      startDate: Date | undefined;
+      endDate: Date | undefined;
+      format: "csv" | "json";
+    };
     try {
       const fetched = await fetchRawTransactions(address);
       if (fetched.status === "error") {
         sendError(res, fetched.httpCode, fetched.errorCode, fetched.message);
         return;
       }
-      const preview = buildTaxLotPreview(fetched.rawTxs);
+      const previewOptions = assets ? { supportedTokens: assets } : {};
+      const preview = buildTaxLotPreview(fetched.rawTxs, previewOptions);
       res.json(preview);
     } catch (error) {
       console.error(
@@ -156,8 +202,15 @@ exportRouter.get(
   "/:address/export",
   exportLimiter,
   validateWalletAddress,
+  validateExportQuery,
   async (req: Request, res: Response) => {
     const { address } = req.params;
+    const { assets } = res.locals.exportParams as {
+      assets: string[] | undefined;
+      startDate: Date | undefined;
+      endDate: Date | undefined;
+      format: "csv" | "json";
+    };
 
     try {
       const fetched = await fetchRawTransactions(address);
@@ -166,7 +219,8 @@ exportRouter.get(
         return;
       }
 
-      const preview = buildTaxLotPreview(fetched.rawTxs);
+      const previewOptions = assets ? { supportedTokens: assets } : {};
+      const preview = buildTaxLotPreview(fetched.rawTxs, previewOptions);
       if (!preview.canDownload) {
         sendError(
           res,

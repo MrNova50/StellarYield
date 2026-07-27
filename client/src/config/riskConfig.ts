@@ -128,3 +128,86 @@ export function formatOracleAge(ageSeconds: number | null): string {
     if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
     return `${Math.floor(ageSeconds / 3600)}h`;
 }
+
+// ── Evidence-backed risk ─────────────────────────────────────────────────────
+
+export type EvidenceSeverity = 'info' | 'warning' | 'critical';
+
+/** A single piece of evidence contributing to a vault's risk assessment. */
+export interface RiskEvidence {
+    source: string;          // e.g. "DeFiLlama TVL", "oracle:bandprotocol"
+    metric: string;          // human-readable metric name
+    value: string;           // formatted current value, e.g. "$1.2M" or "8.4%"
+    severity: EvidenceSeverity;
+    /** ISO-8601 timestamp when this evidence was collected. */
+    collectedAt: string;
+    /** Age in seconds at the time of evaluation. Stale evidence lowers confidence. */
+    ageSeconds: number;
+    vaultId?: string;
+    protocolId?: string;
+}
+
+export type EvidenceConfidence = 'high' | 'medium' | 'low' | 'unknown';
+
+export interface EvidenceBasedRiskLevel {
+    level: RiskLevel;
+    confidence: EvidenceConfidence;
+    explanation: string;
+    evidenceCount: number;
+    staleSources: string[];
+}
+
+/** Evidence older than this threshold degrades confidence. */
+const STALE_THRESHOLD_SECONDS = 3600; // 1 hour
+
+/**
+ * Derive a risk level and confidence from a set of evidence items.
+ *
+ * - No evidence → unknown confidence, fallback level.
+ * - Any stale evidence → confidence degraded to 'low'.
+ * - Any critical evidence → High risk.
+ * - Any warning evidence → at least Medium risk.
+ * - All info → Low risk.
+ */
+export function computeEvidenceBasedRisk(
+    evidence: RiskEvidence[],
+    fallbackLevel: RiskLevel = 'Medium',
+): EvidenceBasedRiskLevel {
+    if (evidence.length === 0) {
+        return {
+            level: fallbackLevel,
+            confidence: 'unknown',
+            explanation: 'No supporting evidence available. Risk level is a default estimate.',
+            evidenceCount: 0,
+            staleSources: [],
+        };
+    }
+
+    const staleSources = evidence
+        .filter((e) => e.ageSeconds > STALE_THRESHOLD_SECONDS)
+        .map((e) => e.source);
+
+    const hasCritical = evidence.some((e) => e.severity === 'critical');
+    const hasWarning  = evidence.some((e) => e.severity === 'warning');
+
+    const level: RiskLevel = hasCritical ? 'High' : hasWarning ? 'Medium' : 'Low';
+
+    let confidence: EvidenceConfidence;
+    if (staleSources.length === 0) {
+        confidence = 'high';
+    } else if (staleSources.length < evidence.length) {
+        confidence = 'medium';
+    } else {
+        confidence = 'low';
+    }
+
+    const worstEvidence = evidence.find(
+        (e) => e.severity === (hasCritical ? 'critical' : hasWarning ? 'warning' : 'info')
+    );
+
+    const explanation = worstEvidence
+        ? `${worstEvidence.source}: ${worstEvidence.metric} is ${worstEvidence.value}.`
+        : RISK_EXPLANATIONS[level].explanation;
+
+    return { level, confidence, explanation, evidenceCount: evidence.length, staleSources };
+}

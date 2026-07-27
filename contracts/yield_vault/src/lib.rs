@@ -46,7 +46,7 @@ use soroban_sdk::{
     Env, IntoVal, Symbol, Val,
 };
 #[path = "../../interfaces/vault_standard.rs"]
-mod vault_standard;
+pub mod vault_standard;
 use vault_standard::VaultStandard;
 
 // ── Storage keys ────────────────────────────────────────────────────────
@@ -75,7 +75,13 @@ enum DataKey {
     ExecutedAdminOp(Bytes), // Hash of (network, contract, operation, nonce)
     // Cross-contract allowlist with network binding (#905)
     AllowedContractRole(Symbol), // Role -> Address allowlist (e.g., "zap" -> ZapContract)
+    // Governance-gated storage schema version (#896)
+    StorageVersion,
 }
+
+/// Storage schema version assigned to newly initialized vaults, and the
+/// implicit version of any vault deployed before migrations existed.
+pub const INITIAL_STORAGE_VERSION: u32 = 1;
 
 mod admin;
 mod donations;
@@ -117,8 +123,9 @@ pub enum VaultError {
     OperationReplayed = 2004,
     /// Cross-contract call from unauthorized or wrong-network contract (maps to error code 2005).
     UnauthorizedContract = 2005,
-    /// Fee recipient is invalid (contract self or zero-equivalent) (maps to error code 2006).
-    InvalidRecipient = 2006,
+    /// Migration target version is not exactly current + 1 — rejects repeated,
+    /// skipped, or out-of-order migrations before any state mutation (maps to error code 2006).
+    InvalidMigrationVersion = 2006,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────
@@ -149,6 +156,9 @@ impl YieldVault {
         env.storage().instance().set(&DataKey::TotalShares, &0i128);
         env.storage().instance().set(&DataKey::TotalAssets, &0i128);
         env.storage().instance().set(&DataKey::Initialized, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &INITIAL_STORAGE_VERSION);
 
         env.events()
             .publish((symbol_short!("init"),), (admin.clone(), token.clone()));
@@ -548,6 +558,30 @@ impl YieldVault {
         Self::get_storage_required(&env, &DataKey::Token)
     }
 
+    // ── Storage Migrations (governance-gated, #896) ──────────────────
+
+    /// Returns the vault's current storage schema version. Vaults
+    /// initialized before this feature existed default to
+    /// [`INITIAL_STORAGE_VERSION`].
+    pub fn get_storage_version(env: Env) -> u32 {
+        YieldVault::get_storage_version_impl(&env)
+    }
+
+    /// Advance the vault's storage schema version by exactly one step.
+    ///
+    /// Migrations are strictly sequential: `to_version` must equal the
+    /// currently stored version + 1. Repeated calls (`to_version` at or
+    /// below the current version) and out-of-order or skipped calls
+    /// (`to_version` more than one ahead) are rejected with
+    /// [`VaultError::InvalidMigrationVersion`] before any state is mutated.
+    ///
+    /// # Arguments
+    /// * `admin` — Must be the vault admin (governance authority).
+    /// * `to_version` — The storage version to migrate to.
+    pub fn migrate_storage(env: Env, admin: Address, to_version: u32) -> Result<(), VaultError> {
+        YieldVault::migrate_storage_impl(env, admin, to_version)
+    }
+
     // ── Strategy: Harvest & Auto-Compound ───────────────────────────
 
     /// Configure the strategy parameters. Admin-only.
@@ -806,6 +840,12 @@ impl YieldVault {
         YieldVault::get_total_referral_rewards_view(env)
     }
 
+    /// Check whether a referee's referral attribution is still within the
+    /// reward-earning window (see `REFERRAL_ATTRIBUTION_WINDOW_SECS`).
+    pub fn is_referral_attribution_active(env: Env, referee: Address) -> bool {
+        YieldVault::is_referral_attribution_active_view(env, referee)
+    }
+
     // ── Fee recipient admin ──────────────────────────────────────────
 
     /// Admin: update the address that receives protocol performance fees.
@@ -1011,7 +1051,7 @@ impl VaultStandard for YieldVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
     use soroban_sdk::{contract, contractimpl, Env, IntoVal};
 
     #[contract]
@@ -1208,6 +1248,60 @@ mod tests {
         assert_eq!(client.get_shares(&unknown), 0);
     }
 
+    // ── Storage Migration Tests (#896) ──────────────────────────────
+
+    #[test]
+    fn test_initial_storage_version() {
+        let (_, client, _, _, _) = setup_env();
+        assert_eq!(client.get_storage_version(), INITIAL_STORAGE_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_storage_advances_version() {
+        let (_, client, admin, _, _) = setup_env();
+
+        client.migrate_storage(&admin, &2);
+        assert_eq!(client.get_storage_version(), 2);
+    }
+
+    #[test]
+    fn test_migrate_storage_sequential_steps() {
+        let (_, client, admin, _, _) = setup_env();
+
+        client.migrate_storage(&admin, &2);
+        client.migrate_storage(&admin, &3);
+        assert_eq!(client.get_storage_version(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2006)")]
+    fn test_migrate_storage_repeated_version_panics() {
+        let (_, client, admin, _, _) = setup_env();
+
+        client.migrate_storage(&admin, &2);
+        // Repeating the same target version must be rejected, not silently re-applied.
+        client.migrate_storage(&admin, &2);
+    }
+
+    #[test]
+    fn test_migrate_storage_out_of_order_fails_before_mutation() {
+        let (_, client, admin, _, _) = setup_env();
+
+        // Skipping straight from version 1 to version 3 must fail...
+        let result = client.try_migrate_storage(&admin, &3);
+        assert!(result.is_err());
+        // ...and must not have mutated the stored version.
+        assert_eq!(client.get_storage_version(), INITIAL_STORAGE_VERSION);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_migrate_storage_by_non_admin_panics() {
+        let (env, client, _, _, _) = setup_env();
+        let impostor = Address::generate(&env);
+        client.migrate_storage(&impostor, &2);
+    }
+
     // ── Referral Tests ───────────────────────────────────────────────
 
     #[test]
@@ -1366,6 +1460,87 @@ mod tests {
 
         let result = client.try_claim_referral_rewards(&referrer);
         assert!(result.is_err());
+    }
+
+    // ── Issue #989: attribution expiry and duplicate-claim coverage ─────────
+
+    #[test]
+    fn test_claim_referral_rewards_twice_second_call_fails() {
+        // Reject duplicate reward claims for the same qualifying action:
+        // once a reward has been claimed, claiming again with no new
+        // accrual in between must fail rather than paying out twice.
+        let (env, client, _, token_addr, token_admin) = setup_env();
+        let referee = Address::generate(&env);
+        let referrer = Address::generate(&env);
+
+        client.register_referral(&referee, &referrer);
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            YieldVault::accrue_referral_reward(&env, &referee, 10_000);
+        });
+        mint_tokens(&env, &token_addr, &token_admin, &contract_id, 1000);
+
+        let claimed = client.claim_referral_rewards(&referrer);
+        assert_eq!(claimed, 500);
+
+        // Second claim for the same (already-settled) accrual must fail.
+        let result = client.try_claim_referral_rewards(&referrer);
+        assert!(result.is_err(), "duplicate claim must be rejected");
+        assert_eq!(client.get_referral_rewards(&referrer), 0);
+    }
+
+    #[test]
+    fn test_accrue_referral_reward_valid_within_attribution_window() {
+        let (env, client, _, _, _) = setup_env();
+        let referee = Address::generate(&env);
+        let referrer = Address::generate(&env);
+
+        client.register_referral(&referee, &referrer);
+        assert!(client.is_referral_attribution_active(&referee));
+
+        // Advance time, but stay inside the attribution window.
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + referrals::REFERRAL_ATTRIBUTION_WINDOW_SECS - 1);
+        assert!(client.is_referral_attribution_active(&referee));
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            YieldVault::accrue_referral_reward(&env, &referee, 10_000);
+        });
+
+        assert_eq!(client.get_referral_rewards(&referrer), 500);
+        assert_eq!(client.get_total_referral_rewards(), 500);
+    }
+
+    #[test]
+    fn test_accrue_referral_reward_expired_attribution_pays_nothing() {
+        let (env, client, _, _, _) = setup_env();
+        let referee = Address::generate(&env);
+        let referrer = Address::generate(&env);
+
+        client.register_referral(&referee, &referrer);
+
+        // Advance time past the attribution window.
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + referrals::REFERRAL_ATTRIBUTION_WINDOW_SECS + 1);
+        assert!(!client.is_referral_attribution_active(&referee));
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            YieldVault::accrue_referral_reward(&env, &referee, 10_000);
+        });
+
+        // Expired attribution: no reward should have been paid to the referrer.
+        assert_eq!(client.get_referral_rewards(&referrer), 0);
+        assert_eq!(client.get_total_referral_rewards(), 0);
+    }
+
+    #[test]
+    fn test_is_referral_attribution_active_false_when_unregistered() {
+        let (env, client, _, _, _) = setup_env();
+        let referee = Address::generate(&env);
+        assert!(!client.is_referral_attribution_active(&referee));
     }
 
     #[test]

@@ -167,7 +167,7 @@ Build completes successfully with no errors (only one unused import warning).
 1. Consider adding more specific error variants for different storage failure types
 2. Add telemetry/logging for storage access failures
 3. Implement storage recovery mechanisms for specific failure scenarios
-4. Add contract upgrade paths that handle storage schema changes
+4. ~~Add contract upgrade paths that handle storage schema changes~~ — done via `migrate_storage`/`get_storage_version` (governance-gated storage migrations, #896)
 
 ## Conclusion
 

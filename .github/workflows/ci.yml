@@ -247,6 +247,11 @@ jobs:
             echo "No deployment manifest found — skipping verification"
           fi
 
+      - name: Check for uncommitted deployment manifest drift
+        working-directory: .
+        shell: bash
+        run: node contracts/scripts/check-manifest-drift.js --manifest contracts/scripts/deployment-manifest.json
+
   readme-commands:
     name: README Command Verification
     runs-on: ubuntu-latest

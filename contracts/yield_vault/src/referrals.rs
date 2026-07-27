@@ -6,6 +6,9 @@ use soroban_sdk::{contracttype, symbol_short, Address, Env};
 pub enum ReferralKey {
     /// Maps a referee address to their referrer.
     Referrer(Address),
+    /// Ledger timestamp when the referee's attribution was recorded.
+    /// Used to expire attribution after `REFERRAL_ATTRIBUTION_WINDOW_SECS`.
+    AttributedAt(Address),
     /// Tracks total TVL referred by a referrer.
     ReferredTvl(Address),
     /// Tracks unclaimed referral rewards for a referrer.
@@ -21,6 +24,14 @@ const DEFAULT_REFERRAL_FEE_BPS: i128 = 500;
 
 /// Maximum referral fee: 10% of protocol performance fee (1000 bps).
 const MAX_REFERRAL_FEE_BPS: i128 = 1_000;
+
+/// Attribution expiry window: 90 days (in seconds). A referral relationship
+/// still resolves via `get_referrer_view` after this window (the link itself
+/// never disappears), but `accrue_referral_reward` stops paying the referrer
+/// once the referee's attribution has aged past this window — protocols
+/// commonly bound the reward-earning tail of a referral rather than letting
+/// it accrue indefinitely.
+pub(crate) const REFERRAL_ATTRIBUTION_WINDOW_SECS: u64 = 7_776_000;
 
 impl YieldVault {
     pub fn register_referral_impl(
@@ -70,6 +81,10 @@ impl YieldVault {
         env.storage()
             .persistent()
             .set(&ReferralKey::Referrer(referee.clone()), referrer);
+        env.storage().persistent().set(
+            &ReferralKey::AttributedAt(referee.clone()),
+            &env.ledger().timestamp(),
+        );
 
         env.events().publish(
             (symbol_short!("referral"),),
@@ -182,6 +197,22 @@ impl YieldVault {
             .get(&ReferralKey::TotalReferralRewards)
             .unwrap_or(0)
     }
+
+    /// Read-only: `true` if `referee`'s referral attribution is still within
+    /// the reward-earning window (i.e. `accrue_referral_reward` would still
+    /// pay out for them). `false` once expired or if never referred.
+    pub fn is_referral_attribution_active_view(env: Env, referee: Address) -> bool {
+        let attributed_at: Option<u64> = env
+            .storage()
+            .persistent()
+            .get(&ReferralKey::AttributedAt(referee));
+        match attributed_at {
+            Some(ts) => {
+                env.ledger().timestamp().saturating_sub(ts) < REFERRAL_ATTRIBUTION_WINDOW_SECS
+            }
+            None => false,
+        }
+    }
 }
 
 // ── Internal helpers (not exposed as contract endpoints) ─────────────
@@ -210,6 +241,22 @@ impl YieldVault {
             Some(r) => r,
             None => return,
         };
+
+        // Attribution expiry: stop paying the referrer once the referee's
+        // attribution has aged past the reward-earning window.
+        let attributed_at: Option<u64> = env
+            .storage()
+            .persistent()
+            .get(&ReferralKey::AttributedAt(referee.clone()));
+        let expired = match attributed_at {
+            Some(ts) => env.ledger().timestamp().saturating_sub(ts) >= REFERRAL_ATTRIBUTION_WINDOW_SECS,
+            None => true,
+        };
+        if expired {
+            env.events()
+                .publish((symbol_short!("ref_exp"),), (referee.clone(), referrer));
+            return;
+        }
 
         let fee_bps: i128 = env
             .storage()
