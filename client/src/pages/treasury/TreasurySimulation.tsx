@@ -1,8 +1,10 @@
 import React, { useState } from "react";
 import { Vault, TrendingUp, AlertTriangle, Save, RotateCcw, Info, Upload, FileText, Download, FileSpreadsheet, FileCode, Sliders, CheckSquare, Square } from "lucide-react";
+import { Vault, TrendingUp, AlertTriangle, AlertCircle, Info, Save, RotateCcw, Upload, FileText } from "lucide-react";
 import { FeeAssumptionsModal } from "../../components/FeeAssumptionsModal";
 import { apiUrl } from "../../lib/api";
 import { decodeTransactionError } from "../../utils/errorDecoder";
+import type { SimulationWarning } from "../../../../shared/types/simulationWarning";
 
 interface AllocationRow {
   vaultId: string;
@@ -21,7 +23,10 @@ interface SimResult {
   projectedYieldUsd: number;
   totalRotationCostUsd: number;
   liquidityRiskScore: number;
+  /** @deprecated Prefer `warnings` for structured rendering. */
   concentrationWarnings: string[];
+  /** Structured warnings with severity, affected field, and remediation. */
+  warnings?: SimulationWarning[];
   allocationBreakdown: Array<{
     vaultId: string;
     vaultName: string;
@@ -94,6 +99,40 @@ interface ScenarioComparisonData {
     maxYieldLossPct: number;
     totalWarningsCount: number;
   };
+// ── Structured warning renderer ─────────────────────────────────────────────
+
+const SEVERITY_ICON: Record<SimulationWarning["severity"], React.ReactElement> = {
+  info: <Info size={14} className="text-blue-400 shrink-0" />,
+  warning: <AlertTriangle size={14} className="text-yellow-400 shrink-0" />,
+  critical: <AlertCircle size={14} className="text-red-400 shrink-0" />,
+};
+
+const SEVERITY_CLASSES: Record<
+  SimulationWarning["severity"],
+  { container: string; message: string }
+> = {
+  info: { container: "bg-blue-500/10 border border-blue-500/20", message: "text-blue-300" },
+  warning: { container: "bg-yellow-500/10 border border-yellow-500/20", message: "text-yellow-300" },
+  critical: { container: "bg-red-500/10 border border-red-500/20", message: "text-red-300" },
+};
+
+function SimWarningCard({ warning }: { warning: SimulationWarning }) {
+  const cls = SEVERITY_CLASSES[warning.severity];
+  return (
+    <div className={`flex gap-2 p-3 rounded-lg ${cls.container}`} role="alert">
+      <div className="mt-0.5">{SEVERITY_ICON[warning.severity]}</div>
+      <div className="text-sm space-y-0.5">
+        <p className={`font-medium ${cls.message}`}>{warning.message}</p>
+        <p className="text-gray-400 text-xs">
+          <span className="font-semibold text-gray-300">Suggestion: </span>
+          {warning.remediation}
+        </p>
+        {warning.affectedField && (
+          <p className="text-gray-500 text-xs font-mono">Field: {warning.affectedField}</p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 const DEFAULT_ALLOCATIONS: AllocationRow[] = [
@@ -630,11 +669,21 @@ const TreasurySimulation: React.FC = () => {
             </div>
             <div className="glass-card p-4">
               <p className="text-xs text-gray-400 uppercase tracking-widest">Warnings</p>
-              <p className="text-2xl font-bold text-white">{result.concentrationWarnings.length}</p>
+              <p className="text-2xl font-bold text-white">{(result.warnings ?? result.concentrationWarnings).length}</p>
             </div>
           </div>
 
-          {result.concentrationWarnings.length > 0 && (
+          {/* Structured warnings — preferred when server returns them */}
+          {result.warnings && result.warnings.length > 0 && (
+            <div className="space-y-2">
+              {result.warnings.map((w, i) => (
+                <SimWarningCard key={i} warning={w} />
+              ))}
+            </div>
+          )}
+
+          {/* Legacy plain-string warnings fallback (for older server responses) */}
+          {(!result.warnings || result.warnings.length === 0) && result.concentrationWarnings.length > 0 && (
             <div className="space-y-2">
               {result.concentrationWarnings.map((w, i) => (
                 <div key={i} className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">

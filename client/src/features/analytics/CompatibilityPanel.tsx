@@ -5,6 +5,7 @@ import {
   TrendingUp, BarChart3, DollarSign,
 } from "lucide-react";
 import StatusBadge from '../../components/StatusBadge';
+import { RISK_CHART_COLORS } from "../../components/charts/darkModeContrast";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -63,36 +64,36 @@ const ACTIONS: { action: ActionType; label: string; icon: React.ReactNode }[] = 
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  compatible: "#3EAC75",
-  degraded: "#F5A623",
-  incompatible: "#FF5E5E",
+  compatible:   RISK_CHART_COLORS.healthy,
+  degraded:     RISK_CHART_COLORS.degraded,
+  incompatible: RISK_CHART_COLORS.critical,
 };
 
 const STATUS_ICONS: Record<string, React.ReactNode> = {
-  compatible: <CheckCircle size={16} className="text-[#3EAC75]" />,
-  degraded: <AlertTriangle size={16} className="text-[#F5A623]" />,
+  compatible:   <CheckCircle size={16} className="text-[#3EAC75]" />,
+  degraded:     <AlertTriangle size={16} className="text-[#F5A623]" />,
   incompatible: <XCircle size={16} className="text-[#FF5E5E]" />,
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: "#FF5E5E",
-  high: "#F5A623",
-  medium: "#6C5DD3",
-  low: "#6B7280",
+  critical: RISK_CHART_COLORS.critical,
+  high:     RISK_CHART_COLORS.degraded,
+  medium:   RISK_CHART_COLORS.medium,
+  low:      RISK_CHART_COLORS.disabled,
 };
 
 const SEVERITY_ICONS: Record<string, React.ReactNode> = {
   critical: <XCircle size={14} className="text-[#FF5E5E]" />,
-  high: <AlertTriangle size={14} className="text-[#F5A623]" />,
-  medium: <Info size={14} className="text-[#6C5DD3]" />,
-  low: <Info size={14} className="text-gray-400" />,
+  high:     <AlertTriangle size={14} className="text-[#F5A623]" />,
+  medium:   <Info size={14} className="text-[#818CF8]" />,
+  low:      <Info size={14} className="text-gray-400" />,
 };
 
 const ACTION_STATUS_CONFIG: Record<ActionStatus, { color: string; label: string }> = {
-  clear: { color: "#3EAC75", label: "All Clear" },
-  warning: { color: "#6B7280", label: "Info" },
-  degraded: { color: "#F5A623", label: "Degraded" },
-  blocked: { color: "#FF5E5E", label: "Blocked" },
+  clear:    { color: RISK_CHART_COLORS.healthy,   label: "All Clear" },
+  warning:  { color: RISK_CHART_COLORS.disabled,  label: "Info" },
+  degraded: { color: RISK_CHART_COLORS.degraded,  label: "Degraded" },
+  blocked:  { color: RISK_CHART_COLORS.critical,  label: "Blocked" },
 };
 
 const SEVERITY_ORDER: Severity[] = ['critical', 'high', 'medium', 'low'];
