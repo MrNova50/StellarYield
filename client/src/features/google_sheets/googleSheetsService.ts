@@ -8,6 +8,8 @@ import {
   GoogleAuthError,
   GOOGLE_AUTH_MESSAGES,
   REQUIRED_SHEETS_SCOPE,
+  classifyGoogleError,
+  parseOAuthCallbackError,
   type GoogleAuthErrorCode,
 } from "./errors";
 import {
@@ -48,11 +50,16 @@ export class GoogleSheetsService {
     }
 
     async exchangeCodeForTokens(code: string): Promise<GoogleOAuthSession> {
-        const response = await fetch("/api/google-sheets/token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code, redirectUri: this.redirectUri }),
-        });
+        let response: Response;
+        try {
+            response = await fetch("/api/google-sheets/token", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ code, redirectUri: this.redirectUri }),
+            });
+        } catch (networkErr) {
+            throw classifyGoogleError(networkErr);
+        }
 
         if (!response.ok) {
             throw await this.parseApiError(response, "Token exchange failed");
@@ -86,11 +93,16 @@ export class GoogleSheetsService {
             throw new GoogleAuthError(GOOGLE_AUTH_MESSAGES.REAUTH_REQUIRED, "REAUTH_REQUIRED");
         }
 
-        const response = await fetch("/api/google-sheets/refresh", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ refreshToken: raw.refreshToken }),
-        });
+        let response: Response;
+        try {
+            response = await fetch("/api/google-sheets/refresh", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ refreshToken: raw.refreshToken }),
+            });
+        } catch (networkErr) {
+            throw classifyGoogleError(networkErr);
+        }
 
         if (!response.ok) {
             const err = await this.parseApiError(response, "Token refresh failed");
@@ -140,14 +152,19 @@ export class GoogleSheetsService {
     async linkSpreadsheet(spreadsheetId: string, sheetName: string): Promise<GoogleSheetsConfig> {
         const session = await this.ensureValidSession();
 
-        const response = await fetch(`/api/google-sheets/verify`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${session.accessToken}`,
-            },
-            body: JSON.stringify({ spreadsheetId, sheetName }),
-        });
+        let response: Response;
+        try {
+            response = await fetch(`/api/google-sheets/verify`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${session.accessToken}`,
+                },
+                body: JSON.stringify({ spreadsheetId, sheetName }),
+            });
+        } catch (networkErr) {
+            throw classifyGoogleError(networkErr);
+        }
 
         if (!response.ok) {
             throw await this.parseApiError(response, "Cannot access spreadsheet");
@@ -191,9 +208,14 @@ export class GoogleSheetsService {
             sheetName: config.sheetName,
         });
 
-        const response = await fetch(`/api/google-sheets/rows?${params}`, {
-            headers: { Authorization: `Bearer ${session.accessToken}` },
-        });
+        let response: Response;
+        try {
+            response = await fetch(`/api/google-sheets/rows?${params}`, {
+                headers: { Authorization: `Bearer ${session.accessToken}` },
+            });
+        } catch (networkErr) {
+            throw classifyGoogleError(networkErr);
+        }
 
         if (!response.ok) {
             throw await this.parseApiError(response, "Failed to read spreadsheet rows");
@@ -220,18 +242,23 @@ export class GoogleSheetsService {
             m.apy.toFixed(2),
         ]);
 
-        const response = await fetch("/api/google-sheets/append", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${session.accessToken}`,
-            },
-            body: JSON.stringify({
-                spreadsheetId: config.spreadsheetId,
-                sheetName: config.sheetName,
-                rows,
-            }),
-        });
+        let response: Response;
+        try {
+            response = await fetch("/api/google-sheets/append", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${session.accessToken}`,
+                },
+                body: JSON.stringify({
+                    spreadsheetId: config.spreadsheetId,
+                    sheetName: config.sheetName,
+                    rows,
+                }),
+            });
+        } catch (networkErr) {
+            throw classifyGoogleError(networkErr);
+        }
 
         if (!response.ok) {
             throw await this.parseApiError(response, "Failed to append metrics");
@@ -241,6 +268,30 @@ export class GoogleSheetsService {
     unlinkAccount(): void {
         localStorage.removeItem(STORAGE_KEY);
         this.clearSession();
+    }
+
+    /**
+     * Call this from the OAuth callback page after Google redirects back.
+     *
+     * If Google appended an `error` query parameter (e.g. `access_denied`
+     * when the user cancelled), throws a typed `GoogleAuthError` so the UI
+     * can display a contextual recovery message instead of a blank screen.
+     *
+     * On success, exchanges the `code` for tokens and returns the session.
+     */
+    async handleOAuthCallback(searchParams: URLSearchParams): Promise<GoogleOAuthSession> {
+        const callbackError = parseOAuthCallbackError(searchParams);
+        if (callbackError) throw callbackError;
+
+        const code = searchParams.get("code");
+        if (!code) {
+            throw new GoogleAuthError(
+                "No authorization code returned by Google.",
+                "OAUTH_DENIED",
+            );
+        }
+
+        return this.exchangeCodeForTokens(code);
     }
 
     getConfig(): GoogleSheetsConfig | null {
@@ -297,16 +348,39 @@ export class GoogleSheetsService {
         try {
             body = (await response.json()) as ApiErrorBody;
         } catch {
-            // ignore
+            // ignore — use status-based fallback below
         }
 
-        const code = body.code ?? (response.status === 401 ? "REAUTH_REQUIRED" : "ACCESS_DENIED");
-        const message =
-            body.error ??
-            GOOGLE_AUTH_MESSAGES[code] ??
-            fallback;
+        // Prefer an explicit code from the server response body.
+        if (body.code) {
+            const message =
+                body.error ??
+                GOOGLE_AUTH_MESSAGES[body.code] ??
+                fallback;
+            return new GoogleAuthError(message, body.code);
+        }
 
-        return new GoogleAuthError(message, code);
+        // Status-based fallback when the server didn't embed a code.
+        if (response.status === 401) {
+            // 401 without a body code means the access token itself is expired
+            // (a refresh may still be possible), not that re-auth is required.
+            return new GoogleAuthError(
+                body.error ?? GOOGLE_AUTH_MESSAGES.TOKEN_EXPIRED,
+                "TOKEN_EXPIRED",
+            );
+        }
+
+        if (response.status === 403) {
+            return new GoogleAuthError(
+                body.error ?? GOOGLE_AUTH_MESSAGES.ACCESS_DENIED,
+                "ACCESS_DENIED",
+            );
+        }
+
+        return new GoogleAuthError(
+            body.error ?? fallback,
+            "ACCESS_DENIED",
+        );
     }
 
     private saveConfig(config: GoogleSheetsConfig): void {

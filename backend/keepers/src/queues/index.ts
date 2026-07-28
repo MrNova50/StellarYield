@@ -9,7 +9,7 @@ import {
 } from './types';
 
 export { getQueueHealth } from './health';
-export type { QueueHealthSummary, QueueHealthEntry, QueueJobCounts } from './health';
+export type { QueueHealthSummary, QueueHealthEntry, QueueJobCounts, QueueQualityMetrics } from './health';
 
 const defaultJobOptions = {
   attempts: config.keeper.jobMaxAttempts,
