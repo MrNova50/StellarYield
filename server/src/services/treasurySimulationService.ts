@@ -4,6 +4,10 @@
  * Computes projected yield, liquidity risk, concentration, and rotation cost
  * for a proposed multi-position treasury deployment.
  */
+import type { SimulationWarning } from "../../../shared/types/simulationWarning";
+
+// Re-export for consumers.
+export type { SimulationWarning } from "../../../shared/types/simulationWarning";
 
 export interface AllocationPosition {
   vaultId: string;
@@ -30,7 +34,10 @@ export interface SimulationResult {
   projectedYieldUsd: number;
   totalRotationCostUsd: number;
   liquidityRiskScore: number;
+  /** @deprecated Use `warnings` for structured warning data. Kept for backwards compatibility. */
   concentrationWarnings: string[];
+  /** Structured warnings with severity, affected field, and remediation text. */
+  warnings: SimulationWarning[];
   allocationBreakdown: Array<{
     vaultId: string;
     vaultName: string;
@@ -179,7 +186,8 @@ const scenarioStore = new Map<string, TreasuryScenario>();
 export function simulateTreasury(scenario: TreasuryScenario): SimulationResult {
   const { id, name, totalCapitalUsd, allocations } = scenario;
 
-  const warnings: string[] = [];
+  const legacyWarnings: string[] = [];
+  const warnings: SimulationWarning[] = [];
 
   let projectedYieldUsd = 0;
   let totalRotationCostUsd = 0;
@@ -196,9 +204,15 @@ export function simulateTreasury(scenario: TreasuryScenario): SimulationResult {
     weightedRisk += (10 - pos.riskScore) * pct;
 
     if (pos.allocationPct > CONCENTRATION_THRESHOLD * 100) {
-      warnings.push(
-        `High concentration in ${pos.vaultName} (${pos.allocationPct.toFixed(1)}%)`,
-      );
+      const legacyMsg = `High concentration in ${pos.vaultName} (${pos.allocationPct.toFixed(1)}%)`;
+      legacyWarnings.push(legacyMsg);
+      warnings.push({
+        code: "HIGH_CONCENTRATION",
+        severity: pos.allocationPct > 80 ? "critical" : "warning",
+        affectedField: `allocations[${pos.vaultId}].allocationPct`,
+        message: legacyMsg,
+        remediation: `Reduce the allocation to ${pos.vaultName} below ${(CONCENTRATION_THRESHOLD * 100).toFixed(0)}% to lower single-vault concentration risk.`,
+      });
     }
 
     return {
@@ -222,7 +236,8 @@ export function simulateTreasury(scenario: TreasuryScenario): SimulationResult {
     projectedYieldUsd: Math.round(projectedYieldUsd * 100) / 100,
     totalRotationCostUsd: Math.round(totalRotationCostUsd * 100) / 100,
     liquidityRiskScore: Math.round(liquidityRiskScore * 100) / 100,
-    concentrationWarnings: warnings,
+    concentrationWarnings: legacyWarnings,
+    warnings,
     allocationBreakdown: breakdown,
   };
 }
