@@ -155,7 +155,7 @@ const router = createBrowserRouter([
       {
         path: "/apy",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="analytics">
             <ApyDashboard />
           </RouteBoundary>
         ),
@@ -227,7 +227,7 @@ const router = createBrowserRouter([
       {
         path: "/governance",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="governance">
             <GovernanceDashboard />
           </RouteBoundary>
         ),
@@ -291,7 +291,7 @@ const router = createBrowserRouter([
       {
         path: "/transparency",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="transparency">
             <TransparencyDashboard />
           </RouteBoundary>
         ),
@@ -299,7 +299,7 @@ const router = createBrowserRouter([
       {
         path: "/transparency/incidents",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="transparency">
             <RiskChronology />
           </RouteBoundary>
         ),
@@ -307,7 +307,7 @@ const router = createBrowserRouter([
       {
         path: "/transparency/relayer",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="transparency">
             <RelayerStatusPage />
           </RouteBoundary>
         ),
@@ -339,7 +339,7 @@ const router = createBrowserRouter([
       {
         path: "/treasury",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="treasury">
             <TreasurySimulation />
           </RouteBoundary>
         ),

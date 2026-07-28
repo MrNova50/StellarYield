@@ -152,7 +152,7 @@ export function createApp() {
   app.use("/api/reliability", reliabilityRouter);
   app.use("/api/relayer", relayerStatusRouter);
   app.use("/api/risk", riskRouter);
-  app.use("/api", googleSheetsRouter);
+  app.use("/api/google-sheets", googleSheetsRouter);
 
   // Legacy JSON metrics (internal tooling)
   app.get("/api/metrics", getMetrics);

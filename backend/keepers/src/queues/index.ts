@@ -17,7 +17,7 @@ export { isRetryableError, TERMINAL_FAILURE_REASONS, JOB_STATES, QUEUE_NAMES };
 export type { JobAttemptRecord, QueueName, LiquidationJobData, CompoundJobData };
 
 export { getQueueHealth } from './health';
-export type { QueueHealthSummary, QueueHealthEntry, QueueJobCounts } from './health';
+export type { QueueHealthSummary, QueueHealthEntry, QueueJobCounts, QueueQualityMetrics } from './health';
 
 const defaultJobOptions = {
   attempts: config.keeper.jobMaxAttempts,
