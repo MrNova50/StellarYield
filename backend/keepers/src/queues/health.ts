@@ -1,4 +1,6 @@
 import { Queue } from 'bullmq';
+import { getRedisConnectionStatus } from './index';
+import { QUEUE_NAMES } from './types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,45 +24,25 @@ export interface QueueJobCounts {
   active: number;
   completed: number;
   failed: number;
+  delayed: number;
+  /** #907: Count of jobs quarantined to the poison queue */
   poison: number;
-}
-
-/**
- * Metrics that go beyond simple counts — these help operators understand
- * *how stale* the backlog is and *why* the most recent failure occurred.
- */
-export interface QueueQualityMetrics {
-  /**
-   * Age in milliseconds of the oldest job currently in the `pending` state.
-   * `null` when there are no pending jobs.
-   */
-  oldestPendingAgeMs: number | null;
-  /**
-   * The `failedReason` string from the most recently failed job.
-   * `null` when no failed jobs exist in the queue.
-   */
-  latestFailureReason: string | null;
 }
 
 export interface QueueHealthEntry {
   name: string;
   counts: QueueJobCounts;
-  metrics: QueueQualityMetrics;
-  status: 'healthy' | 'warning';
+  status: 'healthy' | 'degraded' | 'outage';
   warnings: string[];
 }
 
 export interface QueueHealthSummary {
   /** One entry per queue passed to `getQueueHealth`. */
   queues: QueueHealthEntry[];
-  /**
-   * Per-worker queue entries keyed by worker name.
-   * Provides the same structure as `queues` but scoped to named workers so
-   * dashboards can render compound vs. liquidation metrics side-by-side.
-   */
-  workers: Record<string, QueueHealthEntry>;
-  overallStatus: 'healthy' | 'warning';
+  overallStatus: 'healthy' | 'degraded' | 'outage';
   timestamp: string;
+  /** #909: Redis connection state derived from latency and errors */
+  redisStatus: 'healthy' | 'degraded' | 'outage';
 }
 
 // ---------------------------------------------------------------------------
@@ -72,15 +54,8 @@ export const QUEUE_HEALTH_THRESHOLDS = {
   failed: Number(process.env.QUEUE_FAILED_THRESHOLD ?? '10'),
   /** Maximum number of delayed jobs before a `warning` is emitted. */
   delayed: Number(process.env.QUEUE_DELAYED_THRESHOLD ?? '50'),
-  /** Maximum number of pending (waiting) jobs before a `warning` is emitted. */
-  pending: Number(process.env.QUEUE_PENDING_THRESHOLD ?? '100'),
-  /** Maximum number of poison jobs before a `warning` is emitted. */
+  /** #907: Retry budget exhaustion warning threshold */
   poison: Number(process.env.QUEUE_POISON_THRESHOLD ?? '5'),
-  /**
-   * Maximum age (ms) of the oldest pending job before a `warning` is emitted.
-   * Default: 30 minutes.
-   */
-  oldestPendingAgeMs: Number(process.env.QUEUE_OLDEST_PENDING_AGE_MS ?? String(30 * 60 * 1000)),
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -155,8 +130,7 @@ async function getLatestFailureReason(queue: Queue): Promise<string | null> {
  * compound and liquidation workers explicitly.
  */
 export async function getQueueHealth(queues: Queue[]): Promise<QueueHealthSummary> {
-  const nowMs = Date.now();
-  const t = QUEUE_HEALTH_THRESHOLDS;
+  const redisStatus = await getRedisConnectionStatus();
 
   const entries = await Promise.all(
     queues.map(async (queue): Promise<QueueHealthEntry> => {
@@ -222,10 +196,24 @@ export async function getQueueHealth(queues: Queue[]): Promise<QueueHealthSummar
           `oldest pending job is ${Math.round(oldestPendingAgeMs / 1000)}s old (threshold ${Math.round(t.oldestPendingAgeMs / 1000)}s)`,
         );
       }
+      if (counts.poison > QUEUE_HEALTH_THRESHOLDS.poison) {
+        warnings.push(
+          `poison jobs (${counts.poison}) exceed threshold (${QUEUE_HEALTH_THRESHOLDS.poison})`,
+        );
+      }
+
+      // #909: Degrade queue status if Redis is not healthy
+      let status: QueueHealthEntry['status'] = 'healthy';
+      if (redisStatus === 'outage') {
+        status = 'outage';
+      } else if (redisStatus === 'degraded' || warnings.length > 0) {
+        status = 'degraded';
+      }
 
       return {
         name: queue.name,
         counts,
+        status,
         metrics,
         status: warnings.length > 0 ? 'warning' : 'healthy',
         warnings,
@@ -233,6 +221,17 @@ export async function getQueueHealth(queues: Queue[]): Promise<QueueHealthSummar
     }),
   );
 
+  const overallStatus = redisStatus === 'outage'
+    ? 'outage'
+    : entries.some((e) => e.status === 'outage')
+      ? 'outage'
+      : entries.some((e) => e.status === 'degraded')
+        ? 'degraded'
+        : 'healthy';
+
+  return {
+    queues: entries,
+    overallStatus,
   // ── Per-worker map ─────────────────────────────────────────────────────────
   // Convention: "liquidation" → "liquidationWorker", "compound" → "compoundWorker"
   const workers: Record<string, QueueHealthEntry> = {};
@@ -246,5 +245,6 @@ export async function getQueueHealth(queues: Queue[]): Promise<QueueHealthSummar
     workers,
     overallStatus: entries.some((e) => e.status === 'warning') ? 'warning' : 'healthy',
     timestamp: new Date().toISOString(),
+    redisStatus,
   };
 }
