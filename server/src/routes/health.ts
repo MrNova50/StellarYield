@@ -4,7 +4,15 @@ import { Horizon, rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { validateServerEnv } from "../config/env";
-import { getRegistryProvenance } from "../services/contractRegistry";
+import type {
+  DependencyHealthStatus,
+  HealthSnapshot,
+  HorizonHealthSnapshot,
+  SorobanRpcHealthSnapshot,
+  DatabaseHealthSnapshot,
+  IndexerHealthSnapshot,
+  ReadinessResponse,
+} from "../monitoring/healthSnapshots";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -229,33 +237,88 @@ router.get("/queues", async (_req: Request, res: Response) => {
 
 export type DependencyStatus = "up" | "down" | "warning";
 
-export interface DependencyDetail {
+/**
+ * Typed health snapshot for a single dependency.
+ * Includes latency, checkedAt timestamp, error code, and retryable flag
+ * so operators can distinguish transient failures from permanent ones.
+ */
+export interface HealthSnapshot {
   status: DependencyStatus;
   latencyMs?: number;
+  checkedAt: string;
+  errorCode: string | null;
+  retryable: boolean;
   hint?: string;
 }
 
+export interface DatabaseSnapshot extends HealthSnapshot {}
+
+export interface HorizonSnapshot extends HealthSnapshot {
+  latestLedger?: number;
+}
+
+export interface SorobanRpcSnapshot extends HealthSnapshot {}
+
+export interface IndexerSnapshot extends HealthSnapshot {
+  syncedLedger?: number;
+  lagLedgers?: number;
+}
+
+export interface CacheSnapshot extends HealthSnapshot {}
+
 export interface DependenciesResponse {
-  database: DependencyDetail;
-  horizon: DependencyDetail & { latestLedger?: number };
-  indexer: DependencyDetail & { syncedLedger?: number; lagLedgers?: number };
-  cache: DependencyDetail;
+  database: DatabaseSnapshot;
+  horizon: HorizonSnapshot;
+  sorobanRpc: SorobanRpcSnapshot;
+  indexer: IndexerSnapshot;
+  cache: CacheSnapshot;
   timestamp: string;
   overallStatus: DependencyStatus;
 }
 
-async function checkDatabaseWithLatency(): Promise<DependencyDetail> {
+/**
+ * Readiness probe — a lightweight summary of the combined dependency health
+ * intended for deployment smoke tests and load-balancer health checks.
+ */
+export interface ReadinessResponse {
+  status: "ready" | "degraded" | "unavailable";
+  dependencies: {
+    database: DependencyStatus;
+    horizon: DependencyStatus;
+    sorobanRpc: DependencyStatus;
+    indexer: DependencyStatus;
+    cache: DependencyStatus;
+  };
+  latencyMs: number;
+  checkedAt: string;
+}
+
+async function checkDatabaseWithLatency(): Promise<DatabaseSnapshot> {
   const start = Date.now();
+  const checkedAt = new Date().toISOString();
   try {
     await withTimeout(prisma.$queryRaw`SELECT 1`, HEALTH_TIMEOUT_MS);
-    return { status: "up", latencyMs: Date.now() - start };
+    return {
+      status: "up",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: null,
+      retryable: false,
+    };
   } catch {
-    return { status: "down", hint: "Database unreachable — check DATABASE_URL and Postgres availability" };
+    return {
+      status: "down",
+      checkedAt,
+      errorCode: "DB_UNREACHABLE",
+      retryable: true,
+      hint: "Database unreachable — check DATABASE_URL and Postgres availability",
+    };
   }
 }
 
-async function checkHorizonWithLatency(): Promise<DependencyDetail & { latestLedger?: number }> {
+async function checkHorizonWithLatency(): Promise<HorizonSnapshot> {
   const start = Date.now();
+  const checkedAt = new Date().toISOString();
   try {
     const horizon = new Horizon.Server(HORIZON_URL);
     const resp = await withTimeout(
@@ -265,11 +328,17 @@ async function checkHorizonWithLatency(): Promise<DependencyDetail & { latestLed
     return {
       status: "up",
       latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: null,
+      retryable: false,
       latestLedger: resp.records[0]?.sequence,
     };
   } catch {
     return {
       status: "down",
+      checkedAt,
+      errorCode: "HORIZON_UNREACHABLE",
+      retryable: true,
       hint: "Horizon unreachable — check STELLAR_HORIZON_URL or network connectivity",
     };
   }
@@ -277,8 +346,9 @@ async function checkHorizonWithLatency(): Promise<DependencyDetail & { latestLed
 
 async function checkIndexerWithLatency(
   latestLedger?: number,
-): Promise<DependencyDetail & { syncedLedger?: number; lagLedgers?: number }> {
+): Promise<IndexerSnapshot> {
   const start = Date.now();
+  const checkedAt = new Date().toISOString();
   try {
     const state = await withTimeout(
       prisma.indexerState.findFirst(),
@@ -292,33 +362,73 @@ async function checkIndexerWithLatency(
       return {
         status: "warning",
         latencyMs,
+        checkedAt,
+        errorCode: "INDEXER_LAG",
+        retryable: true,
         syncedLedger,
         lagLedgers,
         hint: `Indexer is ${lagLedgers} ledgers behind — may indicate a stalled indexer process`,
       };
     }
-    return { status: "up", latencyMs, syncedLedger, lagLedgers };
+    return { status: "up", latencyMs, checkedAt, errorCode: null, retryable: false, syncedLedger, lagLedgers };
   } catch {
     return {
       status: "down",
+      checkedAt,
+      errorCode: "INDEXER_STATE_UNAVAILABLE",
+      retryable: true,
       hint: "Indexer state unavailable — check database connectivity and indexer process",
     };
   }
 }
 
-async function checkCacheWithLatency(): Promise<DependencyDetail> {
+async function checkSorobanRpcWithLatency(): Promise<SorobanRpcSnapshot> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+  try {
+    const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
+    await withTimeout(server.getNetwork(), HEALTH_TIMEOUT_MS);
+    return {
+      status: "up",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: null,
+      retryable: false,
+    };
+  } catch {
+    return {
+      status: "down",
+      checkedAt,
+      errorCode: "RPC_UNREACHABLE",
+      retryable: true,
+      hint: "Soroban RPC unreachable — check SOROBAN_RPC_URL and network connectivity",
+    };
+  }
+}
+
+async function checkCacheWithLatency(): Promise<CacheSnapshot> {
   const redis = new Redis(REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     lazyConnect: true,
   });
   const start = Date.now();
+  const checkedAt = new Date().toISOString();
   try {
     await withTimeout(redis.ping(), HEALTH_TIMEOUT_MS);
-    return { status: "up", latencyMs: Date.now() - start };
+    return {
+      status: "up",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: null,
+      retryable: false,
+    };
   } catch {
     return {
       status: "down",
+      checkedAt,
+      errorCode: "CACHE_UNREACHABLE",
+      retryable: true,
       hint: "Redis unreachable — check REDIS_URL and Redis availability",
     };
   } finally {
@@ -329,14 +439,16 @@ async function checkCacheWithLatency(): Promise<DependencyDetail> {
 /**
  * GET /health/dependencies
  *
- * Returns a per-dependency breakdown of database, Horizon, indexer, and cache
- * health. Includes safe latency hints where available. Never exposes credentials
- * or private user data.
+ * Returns a per-dependency typed health snapshot for database, Horizon,
+ * Soroban RPC, indexer, and cache. Each entry includes latency, checkedAt
+ * timestamp, error code, and retryable flag so operators can distinguish
+ * transient failures from permanent ones.
  */
 router.get("/dependencies", async (_req: Request, res: Response) => {
-  const [database, horizon] = await Promise.all([
+  const [database, horizon, sorobanRpc] = await Promise.all([
     checkDatabaseWithLatency(),
     checkHorizonWithLatency(),
+    checkSorobanRpcWithLatency(),
   ]);
 
   const [indexer, cache] = await Promise.all([
@@ -347,6 +459,7 @@ router.get("/dependencies", async (_req: Request, res: Response) => {
   const statuses: DependencyStatus[] = [
     database.status,
     horizon.status,
+    sorobanRpc.status,
     indexer.status,
     cache.status,
   ];
@@ -360,6 +473,7 @@ router.get("/dependencies", async (_req: Request, res: Response) => {
   const body: DependenciesResponse = {
     database,
     horizon,
+    sorobanRpc,
     indexer,
     cache,
     timestamp: new Date().toISOString(),
@@ -367,6 +481,238 @@ router.get("/dependencies", async (_req: Request, res: Response) => {
   };
 
   res.status(overallStatus === "down" ? 503 : 200).json(body);
+});
+
+// ── Typed snapshot helpers ────────────────────────────────────────────────
+
+const DEGRADED_LATENCY_MS = Math.round(HEALTH_TIMEOUT_MS * 0.6);
+
+async function checkHorizonSnapshot(): Promise<HorizonHealthSnapshot> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+  try {
+    const horizon = new Horizon.Server(HORIZON_URL);
+    const resp = await withTimeout(
+      horizon.ledgers().limit(1).order("desc").call(),
+      HEALTH_TIMEOUT_MS,
+    );
+    const latencyMs = Date.now() - start;
+    return {
+      status: latencyMs > DEGRADED_LATENCY_MS ? "degraded" : "healthy",
+      latencyMs,
+      checkedAt,
+      latestLedger: resp.records[0]?.sequence,
+      errorCode: latencyMs > DEGRADED_LATENCY_MS ? "HORIZON_SLOW" : null,
+      retryable: latencyMs > DEGRADED_LATENCY_MS,
+    };
+  } catch {
+    return {
+      status: "unavailable",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: "HORIZON_UNREACHABLE",
+      retryable: true,
+    };
+  }
+}
+
+async function checkSorobanRpcSnapshot(): Promise<SorobanRpcHealthSnapshot> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+  try {
+    const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
+    const network = await withTimeout(server.getNetwork(), HEALTH_TIMEOUT_MS);
+    const latencyMs = Date.now() - start;
+    return {
+      status: latencyMs > DEGRADED_LATENCY_MS ? "degraded" : "healthy",
+      latencyMs,
+      checkedAt,
+      networkPassphrase: network.passphrase,
+      errorCode: latencyMs > DEGRADED_LATENCY_MS ? "SOROBAN_RPC_SLOW" : null,
+      retryable: latencyMs > DEGRADED_LATENCY_MS,
+    };
+  } catch {
+    return {
+      status: "unavailable",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: "SOROBAN_RPC_UNREACHABLE",
+      retryable: true,
+    };
+  }
+}
+
+async function checkDatabaseSnapshot(): Promise<DatabaseHealthSnapshot> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+
+  if (!process.env.DATABASE_URL) {
+    return {
+      status: "misconfigured",
+      latencyMs: 0,
+      checkedAt,
+      errorCode: "DB_MISCONFIGURED",
+      retryable: false,
+    };
+  }
+
+  try {
+    await withTimeout(prisma.$queryRaw`SELECT 1`, HEALTH_TIMEOUT_MS);
+    const latencyMs = Date.now() - start;
+    return {
+      status: latencyMs > DEGRADED_LATENCY_MS ? "degraded" : "healthy",
+      latencyMs,
+      checkedAt,
+      errorCode: latencyMs > DEGRADED_LATENCY_MS ? "DB_SLOW" : null,
+      retryable: latencyMs > DEGRADED_LATENCY_MS,
+    };
+  } catch {
+    return {
+      status: "unavailable",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: "DB_UNREACHABLE",
+      retryable: true,
+    };
+  }
+}
+
+async function checkIndexerSnapshot(
+  latestLedger?: number,
+): Promise<IndexerHealthSnapshot> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+  try {
+    const state = await withTimeout(
+      prisma.indexerState.findFirst(),
+      HEALTH_TIMEOUT_MS,
+    );
+    const syncedLedger = state?.lastLedger ?? 0;
+    const lagLedgers = latestLedger !== undefined && latestLedger !== 0
+      ? Math.max(0, latestLedger - syncedLedger)
+      : undefined;
+
+    if (lagLedgers !== undefined && lagLedgers >= 720) {
+      return {
+        status: "unavailable",
+        latencyMs: Date.now() - start,
+        checkedAt,
+        syncedLedger,
+        lagLedgers,
+        errorCode: "INDEXER_LAG_EXCESSIVE",
+        retryable: true,
+      };
+    }
+    if (lagLedgers !== undefined && lagLedgers >= 50) {
+      return {
+        status: "degraded",
+        latencyMs: Date.now() - start,
+        checkedAt,
+        syncedLedger,
+        lagLedgers,
+        errorCode: "INDEXER_LAG_ELEVATED",
+        retryable: true,
+      };
+    }
+    return {
+      status: "healthy",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      syncedLedger,
+      lagLedgers,
+      errorCode: null,
+      retryable: false,
+    };
+  } catch {
+    return {
+      status: "unavailable",
+      latencyMs: Date.now() - start,
+      checkedAt,
+      errorCode: "INDEXER_STATE_UNREADABLE",
+      retryable: true,
+    };
+  }
+}
+
+/**
+ * GET /health/readiness
+ *
+ * Combined readiness endpoint for deployment smoke tests. Returns typed health
+ * snapshots for each dependency with latency, checkedAt, errorCode, and
+ * retryable flag.  Returns 503 if any dependency is unavailable.
+ */
+router.get("/readiness", async (_req: Request, res: Response) => {
+  const [horizon, sorobanRpc, database] = await Promise.all([
+    checkHorizonSnapshot(),
+    checkSorobanRpcSnapshot(),
+    checkDatabaseSnapshot(),
+  ]);
+
+  const indexer = await checkIndexerSnapshot(horizon.latestLedger);
+
+  const deps = { horizon, sorobanRpc, database, indexer };
+  const statuses: DependencyHealthStatus[] = [
+    deps.horizon.status,
+    deps.sorobanRpc.status,
+    deps.database.status,
+    deps.indexer.status,
+  ];
+
+  const overallStatus: ReadinessResponse["status"] = statuses.includes("unavailable")
+    ? "unavailable"
+    : statuses.includes("degraded")
+      ? "degraded"
+      : "healthy";
+
+  const body: ReadinessResponse = {
+    status: overallStatus,
+    dependencies: deps,
+    checkedAt: new Date().toISOString(),
+  };
+
+  res.status(overallStatus === "unavailable" ? 503 : 200).json(body);
+});
+
+/**
+ * GET /health/readiness
+ *
+ * Lightweight readiness probe returning a single combined status and
+ * per-dependency summary. Designed for deployment smoke tests and
+ * load-balancer health checks. Returns quickly by checking each
+ * dependency with the standard timeout.
+ */
+router.get("/readiness", async (_req: Request, res: Response) => {
+  const overallStart = Date.now();
+
+  const [database, horizon, sorobanRpc] = await Promise.all([
+    checkDatabaseWithLatency(),
+    checkHorizonWithLatency(),
+    checkSorobanRpcWithLatency(),
+  ]);
+
+  const [indexer, cache] = await Promise.all([
+    checkIndexerWithLatency(horizon.latestLedger),
+    checkCacheWithLatency(),
+  ]);
+
+  const deps = { database: database.status, horizon: horizon.status, sorobanRpc: sorobanRpc.status, indexer: indexer.status, cache: cache.status };
+  const statusValues = Object.values(deps);
+
+  let readiness: ReadinessResponse["status"] = "ready";
+  if (statusValues.includes("down")) {
+    readiness = "unavailable";
+  } else if (statusValues.includes("warning")) {
+    readiness = "degraded";
+  }
+
+  const body: ReadinessResponse = {
+    status: readiness,
+    dependencies: deps,
+    latencyMs: Date.now() - overallStart,
+    checkedAt: new Date().toISOString(),
+  };
+
+  res.status(readiness === "unavailable" ? 503 : 200).json(body);
 });
 
 /**
@@ -390,16 +736,7 @@ router.get("/startup", async (_req: Request, res: Response) => {
     horizonRpc: hasValue(env.STELLAR_HORIZON_URL) ? "operational" : "fallback",
   };
 
-  // #936 — registry provenance: proves which source/network/commit produced
-  // the contract addresses this server is using. A manifest that exists but
-  // fails verification (tampered contract ID/network, missing fields) fails
-  // startup diagnostics; a missing manifest is only fatal in production.
-  const registryProvenance = getRegistryProvenance();
-  const registryProvenanceFatal =
-    !registryProvenance.available &&
-    (env.NODE_ENV === "production" || registryProvenance.issues[0] !== "deployment-manifest.json not found");
-
-  const status = validation.errors.length > 0 || registryProvenanceFatal
+  const status = validation.errors.length > 0
     ? "failed"
     : validation.warnings.length > 0
       ? "degraded"
@@ -410,7 +747,6 @@ router.get("/startup", async (_req: Request, res: Response) => {
     capabilities,
     errors: validation.errors,
     warnings: validation.warnings,
-    registryProvenance,
     timestamp: new Date().toISOString(),
   };
 

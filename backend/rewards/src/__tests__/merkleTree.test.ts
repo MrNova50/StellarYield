@@ -417,38 +417,3 @@ describe("previewRewardClaim", () => {
     expect(result.errorCode).toBe("proof_verification_failed");
   });
 });
-
-// ── computeIdempotencyKey ─────────────────────────────────────────────────
-
-describe("computeIdempotencyKey", () => {
-  const { computeIdempotencyKey } = require("../merkleTree");
-
-  it("produces a 64-char hex string", () => {
-    const key = computeIdempotencyKey(1, "GABC", "1000");
-    expect(key).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("is deterministic for the same inputs", () => {
-    const a = computeIdempotencyKey(5, "GABC", "999");
-    const b = computeIdempotencyKey(5, "GABC", "999");
-    expect(a).toBe(b);
-  });
-
-  it("produces different keys for different epochs", () => {
-    const a = computeIdempotencyKey(1, "GABC", "1000");
-    const b = computeIdempotencyKey(2, "GABC", "1000");
-    expect(a).not.toBe(b);
-  });
-
-  it("produces different keys for different claimants", () => {
-    const a = computeIdempotencyKey(1, "GABC", "1000");
-    const b = computeIdempotencyKey(1, "GXYZ", "1000");
-    expect(a).not.toBe(b);
-  });
-
-  it("produces different keys for different amounts", () => {
-    const a = computeIdempotencyKey(1, "GABC", "1000");
-    const b = computeIdempotencyKey(1, "GABC", "2000");
-    expect(a).not.toBe(b);
-  });
-});

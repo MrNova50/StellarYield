@@ -3,7 +3,6 @@
 import React from "react";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import type { VaultPressureMetrics, PressureLevel } from "../../../../server/src/services/vaultPressureService";
-import type { EvidenceBasedRiskLevel } from "../../config/riskConfig";
 
 const LEVEL_STYLES: Record<PressureLevel, { bg: string; text: string; label: string }> = {
   NORMAL:   { bg: "bg-emerald-500/20", text: "text-emerald-400", label: "Normal"   },
@@ -15,8 +14,6 @@ const LEVEL_STYLES: Record<PressureLevel, { bg: string; text: string; label: str
 interface Props {
   metrics: VaultPressureMetrics | null;
   loading?: boolean;
-  /** Evidence-backed risk level. When provided, a risk explanation is shown. */
-  riskLevel?: EvidenceBasedRiskLevel;
 }
 
 function PressureBadge({ level }: { level: PressureLevel }) {
@@ -35,20 +32,7 @@ function PressureBadge({ level }: { level: PressureLevel }) {
  * Displays aggregated inflow/outflow pressure metrics for a vault.
  * Does not expose individual user data — all values are aggregate-only.
  */
-const CONFIDENCE_LABEL: Record<EvidenceBasedRiskLevel["confidence"], string> = {
-  high:    "High confidence",
-  medium:  "Medium confidence",
-  low:     "Low confidence — stale data",
-  unknown: "Confidence unknown",
-};
-
-const RISK_BADGE: Record<EvidenceBasedRiskLevel["level"], { color: string; bg: string }> = {
-  Low:    { color: "text-green-400",  bg: "bg-green-500/15"  },
-  Medium: { color: "text-yellow-400", bg: "bg-yellow-500/15" },
-  High:   { color: "text-red-400",    bg: "bg-red-500/15"    },
-};
-
-export function VaultPressurePanel({ metrics, loading, riskLevel }: Props) {
+export function VaultPressurePanel({ metrics, loading }: Props) {
   const reducedMotion = useReducedMotion();
 
   if (loading) {
@@ -97,25 +81,6 @@ export function VaultPressurePanel({ metrics, loading, riskLevel }: Props) {
         metrics.outflowPressure === "HIGH" || metrics.outflowPressure === "CRITICAL") && (
         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-300">
           ⚠ Unusual flow pressure detected. Execution quality may be affected.
-        </div>
-      )}
-
-      {riskLevel && (
-        <div className={`rounded-lg border px-3 py-2 space-y-1 ${riskLevel.confidence === "unknown" || riskLevel.confidence === "low" ? "border-gray-500/30 bg-gray-500/10" : `border-white/10 ${RISK_BADGE[riskLevel.level].bg}`}`}>
-          <div className="flex items-center justify-between">
-            <span className={`text-xs font-semibold ${RISK_BADGE[riskLevel.level].color}`}>
-              {riskLevel.level} Risk
-            </span>
-            <span className="text-xs text-gray-500">
-              {CONFIDENCE_LABEL[riskLevel.confidence]}
-            </span>
-          </div>
-          <p className="text-xs text-gray-300">{riskLevel.explanation}</p>
-          {riskLevel.staleSources.length > 0 && (
-            <p className="text-xs text-gray-500">
-              Stale: {riskLevel.staleSources.join(", ")}
-            </p>
-          )}
         </div>
       )}
     </div>

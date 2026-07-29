@@ -1,5 +1,3 @@
-import { PrismaClient } from '@prisma/client';
-
 export type RiskPreference = 'conservative' | 'balanced' | 'aggressive';
 
 export interface UserRiskProfile {
@@ -31,7 +29,6 @@ export interface DriftDimension {
 }
 
 export interface DriftResult {
-  id?: string;
   userId: string;
   statedPreference: RiskPreference;
   overallDriftPct: number;
@@ -39,17 +36,6 @@ export interface DriftResult {
   dimensions: DriftDimension[];
   message: string;
   detectedAt: string;
-}
-
-export interface DriftSnapshot {
-  id: string;
-  userId: string;
-  statedPreference: string;
-  overallDriftPct: number;
-  isDrifting: boolean;
-  dimensionData: string;
-  reason: string;
-  createdAt: string;
 }
 
 const PREFERENCE_THRESHOLDS: Record<RiskPreference, {
@@ -61,6 +47,7 @@ const PREFERENCE_THRESHOLDS: Record<RiskPreference, {
   balanced: { maxConcentrationPct: 40, maxVolatilityPct: 18, minLiquidityUsd: 200_000 },
   aggressive: { maxConcentrationPct: 60, maxVolatilityPct: 35, minLiquidityUsd: 50_000 },
 };
+
 
 function computeConcentration(positionWeights: number[]): number {
   if (positionWeights.length === 0) return 0;
@@ -106,13 +93,10 @@ function evaluateDimension(
 }
 
 export class RiskPreferenceDriftService {
-  constructor(private prisma?: PrismaClient) {}
-
-  async detectDrift(
+  detectDrift(
     profile: UserRiskProfile,
     behavior: PortfolioBehavior,
-    reason: string = 'auto_detected',
-  ): Promise<DriftResult> {
+  ): DriftResult {
     const thresholds = PREFERENCE_THRESHOLDS[profile.statedPreference];
 
     const actualConcentration = behavior.positions.length > 0
@@ -121,10 +105,8 @@ export class RiskPreferenceDriftService {
     const actualVolatility = computeWeightedVolatility(behavior.positions);
     const actualLiquidity = computeWeightedLiquidity(behavior.positions);
 
-    let result: DriftResult;
-
     if (behavior.positions.length === 0) {
-      result = {
+      return {
         userId: profile.userId,
         statedPreference: profile.statedPreference,
         overallDriftPct: 0,
@@ -133,104 +115,37 @@ export class RiskPreferenceDriftService {
         message: `Portfolio aligns with ${profile.statedPreference} risk preference.`,
         detectedAt: new Date().toISOString(),
       };
+    }
+
+    const dimensions: DriftDimension[] = [
+      evaluateDimension('concentration', actualConcentration, thresholds.maxConcentrationPct, true),
+      evaluateDimension('volatility', actualVolatility, thresholds.maxVolatilityPct, true),
+      evaluateDimension('liquidity', actualLiquidity, thresholds.minLiquidityUsd, false),
+    ];
+
+    const driftingDims = dimensions.filter(d => d.isDrifting);
+    const overallDriftPct = dimensions.length > 0
+      ? Math.round((driftingDims.length / dimensions.length) * 100)
+      : 0;
+    const isDrifting = driftingDims.length > 0;
+
+    let message: string;
+    if (!isDrifting) {
+      message = `Portfolio aligns with ${profile.statedPreference} risk preference.`;
     } else {
-      const dimensions: DriftDimension[] = [
-        evaluateDimension('concentration', actualConcentration, thresholds.maxConcentrationPct, true),
-        evaluateDimension('volatility', actualVolatility, thresholds.maxVolatilityPct, true),
-        evaluateDimension('liquidity', actualLiquidity, thresholds.minLiquidityUsd, false),
-      ];
-
-      const driftingDims = dimensions.filter(d => d.isDrifting);
-      const overallDriftPct = dimensions.length > 0
-        ? Math.round((driftingDims.length / dimensions.length) * 100)
-        : 0;
-      const isDrifting = driftingDims.length > 0;
-
-      let message: string;
-      if (!isDrifting) {
-        message = `Portfolio aligns with ${profile.statedPreference} risk preference.`;
-      } else {
-        const driftNames = driftingDims.map(d => d.dimension).join(', ');
-        message = `Detected drift in ${driftNames}. Portfolio no longer matches ${profile.statedPreference} profile.`;
-      }
-
-      result = {
-        userId: profile.userId,
-        statedPreference: profile.statedPreference,
-        overallDriftPct,
-        isDrifting,
-        dimensions,
-        message,
-        detectedAt: new Date().toISOString(),
-      };
+      const driftNames = driftingDims.map(d => d.dimension).join(', ');
+      message = `Detected drift in ${driftNames}. Portfolio no longer matches ${profile.statedPreference} profile.`;
     }
-
-    // Persist snapshot
-    if (this.prisma) {
-      const snapshot = await this.recordDrift(result, reason);
-      result.id = snapshot.id;
-    }
-
-    return result;
-  }
-
-  async recordDrift(drift: DriftResult, reason: string): Promise<DriftSnapshot> {
-    if (!this.prisma) {
-      throw new Error('Prisma client not initialized');
-    }
-
-    const record = await this.prisma.riskPreferenceDriftSnapshot.create({
-      data: {
-        userId: drift.userId,
-        statedPreference: drift.statedPreference,
-        overallDriftPct: drift.overallDriftPct,
-        isDrifting: drift.isDrifting,
-        dimensionData: JSON.stringify(drift.dimensions),
-        reason,
-      },
-    });
 
     return {
-      ...record,
-      createdAt: record.createdAt.toISOString(),
-      dimensionData: record.dimensionData,
+      userId: profile.userId,
+      statedPreference: profile.statedPreference,
+      overallDriftPct,
+      isDrifting,
+      dimensions,
+      message,
+      detectedAt: new Date().toISOString(),
     };
-  }
-
-  async resetDrift(
-    userId: string,
-    preference: RiskPreference,
-    reason: string,
-  ): Promise<DriftSnapshot> {
-    return this.recordDrift(
-      {
-        userId,
-        statedPreference: preference,
-        overallDriftPct: 0,
-        isDrifting: false,
-        dimensions: [],
-        message: `Risk preference reset to ${preference}: ${reason}`,
-        detectedAt: new Date().toISOString(),
-      },
-      reason,
-    );
-  }
-
-  async getDriftHistory(userId: string, limit: number = 10): Promise<DriftSnapshot[]> {
-    if (!this.prisma) {
-      return [];
-    }
-
-    const records = await this.prisma.riskPreferenceDriftSnapshot.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
-
-    return records.map(r => ({
-      ...r,
-      createdAt: r.createdAt.toISOString(),
-    }));
   }
 
   getThresholdsForPreference(preference: RiskPreference) {

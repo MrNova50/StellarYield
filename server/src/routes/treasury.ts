@@ -1,5 +1,4 @@
 import { Router, Request, Response } from "express";
-import rateLimit from "express-rate-limit";
 import {
   simulateTreasury,
   compareTreasuryScenarios,
@@ -26,12 +25,30 @@ const treasuryMutationLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many treasury requests. Please try again later." },
 });
+function validateAllocations(allocations: unknown): allocations is AllocationPosition[] {
+  if (!Array.isArray(allocations) || allocations.length === 0) return false;
+  const total = (allocations as AllocationPosition[]).reduce(
+    (sum, a) => sum + (a.allocationPct ?? 0),
+    0,
+  );
+  if (Math.abs(total - 100) > 0.01) return false;
+  return (allocations as AllocationPosition[]).every(
+    (a) =>
+      typeof a.vaultId === "string" &&
+      typeof a.vaultName === "string" &&
+      typeof a.allocationPct === "number" &&
+      typeof a.apy === "number" &&
+      typeof a.tvlUsd === "number" &&
+      typeof a.riskScore === "number" &&
+      typeof a.rotationCostPct === "number",
+  );
+}
 
 /**
  * POST /api/treasury/simulate
  * Run a treasury simulation. Optionally saves the scenario.
  */
-router.post("/simulate", treasuryMutationLimiter, (req: Request, res: Response) => {
+router.post("/simulate", (req: Request, res: Response) => {
   try {
     const scenario = assertValidScenarioInput({
       ...req.body,
@@ -134,7 +151,7 @@ router.post("/export-comparison", treasuryMutationLimiter, (req: Request, res: R
  * POST /api/treasury/scenarios
  * Save a scenario without simulating.
  */
-router.post("/scenarios", treasuryMutationLimiter, (req: Request, res: Response) => {
+router.post("/scenarios", (req: Request, res: Response) => {
   try {
     const scenario = assertValidScenarioInput({
       ...req.body,
@@ -228,7 +245,7 @@ router.post("/cashflow/preview", (req: Request, res: Response) => {
  * Validate and store cashflow rows for a scenario.
  * For now this is a stub that delegates to previewImport and returns success.
  */
-router.post("/cashflow/import", treasuryMutationLimiter, (req: Request, res: Response) => {
+router.post("/cashflow/import", (req: Request, res: Response) => {
   const { scenarioId, rows } = req.body;
   if (!scenarioId || !Array.isArray(rows)) {
     res.status(400).json(

@@ -29,8 +29,6 @@ export interface ArchiveMetadata {
   createdAt: Date;
   completedAt?: Date;
   checksumHash: string; // SHA-256 for integrity
-  provenanceHash?: string; // SHA-256 of source data snapshot
-  sourceDataSummary?: Record<string, unknown>; // Optional summary of source data for provenance
   error?: string;
 }
 
@@ -94,22 +92,6 @@ export class EventArchiveService {
   }
 
   /**
-   * Calculate stable SHA-256 hash of source data for provenance tracking.
-   * Ensures consistent hashing regardless of JSON serialization order.
-   */
-  private calculateProvenanceHash(sourceData: Record<string, unknown>): string {
-    const sorted = Object.keys(sourceData)
-      .sort()
-      .reduce((acc, key) => {
-        acc[key] = sourceData[key];
-        return acc;
-      }, {} as Record<string, unknown>);
-
-    const jsonString = JSON.stringify(sorted);
-    return crypto.createHash("sha256").update(jsonString).digest("hex");
-  }
-
-  /**
    * Compress event data using gzip for efficient storage.
    */
   async compressEventData(events: EventArchiveRecord[]): Promise<Buffer> {
@@ -156,20 +138,14 @@ export class EventArchiveService {
   /**
    * Archive a batch of events.
    * Returns metadata about the archive created.
-   * Optionally tracks source data provenance for audit purposes.
    */
   async archiveEvents(
     events: EventArchiveRecord[],
-    options: {
-      checkIntegrity?: boolean;
-      sourceData?: Record<string, unknown>;
-    } = {},
+    checkIntegrity: boolean = true,
   ): Promise<ArchiveMetadata> {
     if (events.length === 0) {
       throw new Error("Cannot archive empty event batch");
     }
-
-    const { checkIntegrity = true, sourceData } = options;
 
     const archiveId = `archive_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
     const startDate = new Date(Math.min(...events.map((e) => e.createdAt.getTime())));
@@ -186,8 +162,6 @@ export class EventArchiveService {
       status: "pending",
       createdAt: new Date(),
       checksumHash: "",
-      provenanceHash: sourceData ? this.calculateProvenanceHash(sourceData) : undefined,
-      sourceDataSummary: sourceData ? { eventCount: events.length, ...sourceData } : undefined,
     };
 
     try {
