@@ -190,54 +190,25 @@ export default function TransactionBuilder({
           <>
             <p className="text-sm text-gray-400">{action.description}</p>
 
-            {action.fields.map((field) => {
-              const fieldError = validationSummary?.errors.find(
-                (e) => e.field === field.name,
-              );
-              return (
-                <div key={field.name}>
-                  <label
-                    htmlFor={`tx-field-${field.name}`}
-                    className="block text-sm text-gray-400 mb-1"
-                  >
-                    {field.label}
-                    {field.required && (
-                      <span className="text-red-400 ml-0.5" aria-hidden="true">*</span>
-                    )}
-                  </label>
-                  <input
-                    id={`tx-field-${field.name}`}
-                    type={field.type === "number" ? "number" : "text"}
-                    placeholder={field.placeholder}
-                    value={fieldValues[field.name] ?? ""}
-                    aria-invalid={fieldError !== undefined}
-                    aria-describedby={
-                      fieldError ? `tx-field-${field.name}-error` : undefined
-                    }
-                    onChange={(e) =>
-                      setFieldValues((prev) => ({
-                        ...prev,
-                        [field.name]: e.target.value,
-                      }))
-                    }
-                    className={`w-full bg-[#1a1a2e] border rounded-lg px-4 py-2 text-white ${
-                      fieldError
-                        ? "border-red-500/60"
-                        : "border-gray-700"
-                    }`}
-                  />
-                  {fieldError && (
-                    <p
-                      id={`tx-field-${field.name}-error`}
-                      role="alert"
-                      className="mt-1 text-xs text-red-400"
-                    >
-                      {fieldError.message}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
+            {action.fields.map((field) => (
+              <div key={field.name}>
+                <label className="block text-sm text-gray-400 mb-1">
+                  {field.label}
+                </label>
+                <input
+                  type={field.type === "number" ? "number" : "text"}
+                  placeholder={field.placeholder}
+                  value={fieldValues[field.name] ?? ""}
+                  onChange={(e) =>
+                    setFieldValues((prev) => ({
+                      ...prev,
+                      [field.name]: e.target.value,
+                    }))
+                  }
+                  className="w-full bg-[#1a1a2e] border border-gray-700 rounded-lg px-4 py-2 text-white"
+                />
+              </div>
+            ))}
 
             <TxStatusTimeline
               steps={BUILD_PHASE_STEPS}

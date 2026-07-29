@@ -1,5 +1,4 @@
 import { Router, Request, Response } from "express";
-import rateLimit from "express-rate-limit";
 import {
   simulateTreasury,
   saveScenario,
@@ -17,16 +16,6 @@ import {
 import { successEnvelope, errorEnvelope } from "../types/envelope";
 
 const router = Router();
-
-// #935 — treasury simulation/mutation endpoints are compute- and storage-heavy;
-// rate-limit to prevent burst abuse with a clear 429 error response.
-const treasuryMutationLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many treasury requests. Please try again later." },
-});
 
 function validateAllocations(allocations: unknown): allocations is AllocationPosition[] {
   if (!Array.isArray(allocations) || allocations.length === 0) return false;
@@ -51,7 +40,7 @@ function validateAllocations(allocations: unknown): allocations is AllocationPos
  * POST /api/treasury/simulate
  * Run a treasury simulation. Optionally saves the scenario.
  */
-router.post("/simulate", treasuryMutationLimiter, (req: Request, res: Response) => {
+router.post("/simulate", (req: Request, res: Response) => {
   try {
     const scenario = assertValidScenarioInput({
       ...req.body,
@@ -85,7 +74,7 @@ router.post("/simulate", treasuryMutationLimiter, (req: Request, res: Response) 
  * POST /api/treasury/scenarios
  * Save a scenario without simulating.
  */
-router.post("/scenarios", treasuryMutationLimiter, (req: Request, res: Response) => {
+router.post("/scenarios", (req: Request, res: Response) => {
   try {
     const scenario = assertValidScenarioInput({
       ...req.body,
@@ -179,7 +168,7 @@ router.post("/cashflow/preview", (req: Request, res: Response) => {
  * Validate and store cashflow rows for a scenario.
  * For now this is a stub that delegates to previewImport and returns success.
  */
-router.post("/cashflow/import", treasuryMutationLimiter, (req: Request, res: Response) => {
+router.post("/cashflow/import", (req: Request, res: Response) => {
   const { scenarioId, rows } = req.body;
   if (!scenarioId || !Array.isArray(rows)) {
     res.status(400).json(

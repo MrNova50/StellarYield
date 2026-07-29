@@ -2,12 +2,12 @@ import {
   createBrowserRouter,
   RouterProvider,
   Outlet,
+  Link,
   useLocation,
 } from "react-router-dom";
 import { lazy, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import Vault from "./components/Vault";
-import { getFeatureFlags } from "./utils/featureFlags";
 const ApyDashboard = lazy(() => import("./components/dashboard/ApyDashboard"));
 const AIAdvisor = lazy(() => import("./components/AIAdvisor"));
 const PortfolioPage = lazy(() => import("./components/portfolio/PortfolioPage"));
@@ -33,32 +33,6 @@ const StrategyComparison = lazy(() => import("./pages/strategy/StrategyCompariso
 const StrategyLeaderboard = lazy(() => import("./pages/leaderboard/StrategyLeaderboard"));
 const TreasurySimulation = lazy(() => import("./pages/treasury/TreasurySimulation"));
 const WalletSessionReview = lazy(() => import("./auth/WalletSessionReview"));
-// ── Experimental analytics panels (feature-flag gated) ──────────────────────
-const PortfolioAttributionPanel = lazy(
-  () => import("./features/analytics/PortfolioAttributionPanel"),
-);
-const StrategyHealthPanel = lazy(
-  () => import("./features/analytics/StrategyHealthPanel"),
-);
-// Resolve flags once at module load time — stable reference for the router
-const _featureFlags = getFeatureFlags();
-
-/** Wrapper that injects the connected wallet address into PortfolioAttributionPanel. */
-function PortfolioAttributionRoute() {
-  const { walletAddress } = useWallet();
-  if (!walletAddress) {
-    return (
-      <div className="text-gray-400 text-center py-12">
-        Connect your wallet to view portfolio attribution.
-      </div>
-    );
-  }
-  return (
-    <RouteBoundary>
-      <PortfolioAttributionPanel walletAddress={walletAddress} />
-    </RouteBoundary>
-  );
-}
 const FragmentationDashboard = lazy(() =>
   import("./features/fragmentation").then((m) => ({ default: m.FragmentationDashboard })),
 );
@@ -67,10 +41,20 @@ const ReallocationTimelinePlanner = lazy(() =>
     default: m.ReallocationTimelinePlanner,
   })),
 );
-import NavBar from "./components/Navigation/NavBar";
+import ConnectWalletButton from "./components/wallet/ConnectWalletButton";
+import NotificationBell from "./components/Navigation/NotificationBell";
 import OnRampModal from "./features/onramp/OnRampModal";
 import { useWallet } from "./context/useWallet";
 import RouteBoundary from "./components/common/RouteBoundary";
+import {
+  Landmark,
+  Zap,
+  BarChart3,
+  Menu,
+  X,
+  Settings,
+  Bell,
+} from "lucide-react";
 import "./index.css";
 import SettingsModal from "./features/settings/SettingsModal";
 import AlertsModal from "./features/alerts/AlertsModal";
@@ -102,6 +86,7 @@ const RootLayout = () => {
   const [isOnRampOpen, setIsOnRampOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const location = useLocation();
   const isHomePage = location.pathname === "/";
 
@@ -128,10 +113,108 @@ const RootLayout = () => {
       )}
       {/* Navigation Bar */}
       {!isHomePage && (
-        <NavBar
-          onSettingsOpen={() => setIsSettingsOpen(true)}
-          onAlertsOpen={() => setIsAlertsOpen(true)}
-        />
+        <nav className="app-nav glass-panel mx-3 mt-4 px-4 py-3.5 flex justify-between items-center mb-6 sticky top-3 z-50 shadow-2xl">
+          <div className="flex items-center gap-2 shrink-0">
+            <svg viewBox="0 0 256 256" fill="none" className="w-8 h-8 flex-shrink-0" xmlns="http://www.w3.org/2000/svg">
+              <path d="M 0 256 L 0 128 L 128 128 Z M 128 256 L 128 128 L 256 128 Z M 0 128 L 0 0 L 128 0 Z M 128 128 L 128 0 L 256 0 Z" fill="rgb(84, 84, 84)"></path>
+            </svg>
+            <h1 className="text-base font-bold tracking-wide text-slate-900">
+              Stellar Yield
+            </h1>
+          </div>
+
+          <div className="hidden md:flex flex-1 min-w-0 nav-links">
+            <div className="flex gap-4 xl:gap-5 items-center text-[0.82rem] font-semibold text-slate-600 px-4">
+              <Link to="/" className="hover:text-slate-900 transition-colors flex items-center gap-1.5">
+                <Landmark size={15} /> Yield Vaults
+              </Link>
+              <Link to="/" className="hover:text-slate-900 transition-colors flex items-center gap-1.5">
+                <Zap size={15} /> Strategies
+              </Link>
+              <Link to="/" className="hover:text-slate-900 transition-colors flex items-center gap-1.5">
+                <BarChart3 size={15} /> APY Compare
+              </Link>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <NotificationBell />
+            {isConnected && (
+              <button
+                type="button"
+                onClick={() => setIsAlertsOpen(true)}
+                aria-label="Open APY alerts"
+                className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors"
+              >
+                <Bell size={16} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              aria-label="Open transaction settings"
+              className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <Settings size={16} />
+            </button>
+            <ConnectWalletButton />
+            {/* Mobile menu toggle — visible below md breakpoint */}
+            <button
+              type="button"
+              onClick={() => setIsDrawerOpen((v) => !v)}
+              aria-label={isDrawerOpen ? "Close navigation menu" : "Open navigation menu"}
+              aria-expanded={isDrawerOpen}
+              aria-controls="mobile-nav-drawer"
+              className="md:hidden p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              {isDrawerOpen ? <X size={18} /> : <Menu size={18} />}
+            </button>
+          </div>
+        </nav>
+      )}
+
+      {/* Mobile Navigation Drawer */}
+      {isDrawerOpen && (
+        <div
+          id="mobile-nav-drawer"
+          role="dialog"
+          aria-label="Navigation menu"
+          className="md:hidden fixed inset-0 z-40 flex"
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIsDrawerOpen(false)}
+            aria-hidden="true"
+          />
+          {/* Drawer panel */}
+          <nav
+            className="relative ml-auto w-72 h-full glass-panel rounded-none rounded-l-2xl overflow-y-auto flex flex-col gap-1 px-4 py-6"
+            aria-label="Mobile navigation"
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("a")) {
+                setIsDrawerOpen(false);
+              }
+            }}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-sm font-semibold text-gray-400 uppercase tracking-widest">Menu</span>
+              <button
+                type="button"
+                onClick={() => setIsDrawerOpen(false)}
+                aria-label="Close navigation menu"
+                className="p-1 rounded-lg text-gray-400 hover:text-white transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Primary routes */}
+            <Link to="/" className="drawer-link"><Landmark size={16} /> Yield Vaults</Link>
+            <Link to="/" className="drawer-link"><Zap size={16} /> Strategies</Link>
+            <Link to="/" className="drawer-link"><BarChart3 size={16} /> APY Compare</Link>
+          </nav>
+        </div>
       )}
 
       {/* Main Content Area */}
@@ -344,27 +427,6 @@ const router = createBrowserRouter([
           </RouteBoundary>
         ),
       },
-      // ── Experimental analytics routes (feature-flag gated) ──────────────
-      ...(_featureFlags.experimentalAnalytics || _featureFlags.experimentalPortfolioAttribution
-        ? [
-            {
-              path: "/analytics/attribution",
-              element: <PortfolioAttributionRoute />,
-            },
-          ]
-        : []),
-      ...(_featureFlags.experimentalAnalytics || _featureFlags.experimentalStrategyHealth
-        ? [
-            {
-              path: "/analytics/strategy-health",
-              element: (
-                <RouteBoundary>
-                  <StrategyHealthPanel />
-                </RouteBoundary>
-              ),
-            },
-          ]
-        : []),
     ],
   },
 ]);

@@ -149,6 +149,7 @@ export class LiquidationWorker {
         await quarantineJob(createLiquidationQueue(), job, message, accountAddress);
       }
       throw err;
+    }
     const dryRun = evaluateLiquidationDryRun(job.data);
     if (!dryRun.safe) {
       logger.warn(

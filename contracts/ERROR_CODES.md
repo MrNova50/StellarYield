@@ -40,10 +40,6 @@ Source: `contracts/yield_vault/src/lib.rs`
 | 11   | `StorageKeyNotFound`    | Required storage key is missing             | Ensure contract is properly initialized and configured |
 | 2001 | `InvalidDonationBps`    | Donation basis points outside 0–10 000      | Pass a value between 0 and 10 000                      |
 | 2002 | `CharityNotWhitelisted` | Charity address not on protocol whitelist   | Use `set_charity_whitelist` to add the address         |
-| 2003 | `OperationExpired`      | Admin operation intent has expired          | Re-submit with a fresh nonce and expiry                |
-| 2004 | `OperationReplayed`     | Admin operation was already executed        | No action needed; operation already applied            |
-| 2005 | `UnauthorizedContract`  | Caller is not the allowlisted contract      | Use the registered contract for that role              |
-| 2006 | `InvalidMigrationVersion` | `migrate_storage` target isn't current version + 1 | Pass `get_storage_version() + 1` as `to_version`  |
 
 ---
 
@@ -116,7 +112,6 @@ Source: `contracts/optimistic_governance/src/lib.rs`
 | 7    | `ProposalAlreadyExecuted` | Proposal was already executed            | No action needed                       |
 | 8    | `InsufficientVotingPower` | Caller does not have enough voting power | Acquire more governance tokens         |
 | 9    | `ChallengeWindowExpired`  | Challenge window has passed              | Cannot challenge after expiry          |
-| 10   | `InvalidMigrationVersion` | `migrate_storage` target isn't current version + 1 | Pass `get_storage_version() + 1` as `to_version` |
 
 ---
 

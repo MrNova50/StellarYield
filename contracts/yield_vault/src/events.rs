@@ -36,11 +36,6 @@ pub const HARVEST_EVENT_V1: EventVersion = EventVersion {
     schema_version: 1,
 };
 
-pub const MIGRATION_EVENT_V1: EventVersion = EventVersion {
-    event_type: "migration",
-    schema_version: 1,
-};
-
 /// Emit a versioned event with schema version information.
 ///
 /// This helper ensures all events include version metadata for future
@@ -52,7 +47,7 @@ pub const MIGRATION_EVENT_V1: EventVersion = EventVersion {
 /// * `topic` - The event topic (e.g., "deposit")
 /// * `version` - The schema version for this event
 /// * `data` - The event data payload
-pub fn emit_versioned_event<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
+pub fn emit_versioned_event<T>(
     env: &Env,
     topic: Symbol,
     version: u32,
@@ -93,7 +88,6 @@ pub fn check_event_version(
         ("withdrawal", 1) => EventDecodeStatus::Recognized,
         ("admin_action", 1) => EventDecodeStatus::Recognized,
         ("harvest", 1) => EventDecodeStatus::Recognized,
-        ("migration", 1) => EventDecodeStatus::Recognized,
         // Future versions go to dead-letter
         (_, future) if future > VAULT_EVENT_SCHEMA_VERSION => EventDecodeStatus::Unknown,
         _ => EventDecodeStatus::Invalid,

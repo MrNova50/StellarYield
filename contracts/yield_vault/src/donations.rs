@@ -15,7 +15,7 @@
 //!   *before* it is credited to the user, always within checked arithmetic.
 //! - Overflow on `TotalDonated` is absorbed gracefully by saturating add.
 
-use crate::{VaultError, YieldVault, YieldVaultArgs, YieldVaultClient};
+use crate::{VaultError, YieldVault};
 use soroban_sdk::{contracttype, symbol_short, token, Address, Env};
 
 // ── Storage Keys ────────────────────────────────────────────────────────
@@ -41,7 +41,6 @@ const BPS_DENOMINATOR: i128 = 10_000;
 
 // ── Public API ───────────────────────────────────────────────────────────
 
-#[soroban_sdk::contractimpl]
 impl YieldVault {
     /// Configure the auto-donate yield split for the calling user.
     ///
@@ -147,12 +146,6 @@ impl YieldVault {
             .unwrap_or(0)
     }
 
-}
-
-// Internal helper (takes `&Env`/`&Address`, not a valid contract entry-point
-// signature; called from harvest/withdrawal flows) — kept outside
-// `#[contractimpl]`.
-impl YieldVault {
     // ── Internal ────────────────────────────────────────────────────────
 
     /// Routes the donation slice out of `yield_amount` to the configured

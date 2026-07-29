@@ -1,21 +1,13 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect } from '@jest/globals';
 import {
     calculateCapacityStatus,
     checkDepositAgainstCapacity,
     getMultiVaultCapacityStatus,
     filterVaultsByStatus,
-    recordCapacitySample,
-    getSmoothedUtilization,
-    getRecentSamples,
     type CapacityInputs,
 } from './vaultCapacityService';
 
 describe('vaultCapacityService', () => {
-    beforeEach(() => {
-        // Clear sample history between tests by creating a fresh instance per test
-        // Note: In a real implementation, you might want to export a clear function
-    });
-
     describe('calculateCapacityStatus', () => {
         it('returns normal status for low utilization', () => {
             const inputs: CapacityInputs = {
@@ -251,26 +243,22 @@ describe('vaultCapacityService', () => {
                 {
                     vaultId: 'vault1',
                     currentUtilization: 10,
-                    smoothedUtilization: 10,
                     isNearCapacity: false,
                     isAtCapacity: false,
                     availableCapacity: BigInt(9000000),
                     recommendedMaxDeposit: BigInt(500000),
                     status: 'normal' as const,
                     warnings: [],
-                    recentSamples: [],
                 },
                 {
                     vaultId: 'vault2',
                     currentUtilization: 80,
-                    smoothedUtilization: 80,
                     isNearCapacity: true,
                     isAtCapacity: false,
                     availableCapacity: BigInt(2000000),
                     recommendedMaxDeposit: BigInt(200000),
                     status: 'near_capacity' as const,
                     warnings: [],
-                    recentSamples: [],
                 },
             ];
 
@@ -285,26 +273,22 @@ describe('vaultCapacityService', () => {
                 {
                     vaultId: 'vault1',
                     currentUtilization: 10,
-                    smoothedUtilization: 10,
                     isNearCapacity: false,
                     isAtCapacity: false,
                     availableCapacity: BigInt(9000000),
                     recommendedMaxDeposit: BigInt(500000),
                     status: 'normal' as const,
                     warnings: [],
-                    recentSamples: [],
                 },
                 {
                     vaultId: 'vault2',
                     currentUtilization: 80,
-                    smoothedUtilization: 80,
                     isNearCapacity: true,
                     isAtCapacity: false,
                     availableCapacity: BigInt(2000000),
                     recommendedMaxDeposit: BigInt(200000),
                     status: 'near_capacity' as const,
                     warnings: [],
-                    recentSamples: [],
                 },
             ];
 
@@ -319,14 +303,12 @@ describe('vaultCapacityService', () => {
                 {
                     vaultId: 'vault1',
                     currentUtilization: 100,
-                    smoothedUtilization: 100,
                     isNearCapacity: true,
                     isAtCapacity: true,
                     availableCapacity: BigInt(0),
                     recommendedMaxDeposit: BigInt(0),
                     status: 'over_capacity' as const,
                     warnings: [],
-                    recentSamples: [],
                 },
             ];
 
@@ -334,88 +316,6 @@ describe('vaultCapacityService', () => {
 
             expect(overCapacity).toHaveLength(1);
             expect(overCapacity[0].vaultId).toBe('vault1');
-        });
-    });
-
-    describe('Trend smoothing and outlier rejection', () => {
-        it('records capacity samples with outlier detection', () => {
-            const vaultId = 'vault_smooth_1';
-
-            // Record normal samples
-            recordCapacitySample(vaultId, 50);
-            recordCapacitySample(vaultId, 52);
-            recordCapacitySample(vaultId, 51);
-
-            // Record an outlier
-            recordCapacitySample(vaultId, 95);
-
-            // Record normal sample again
-            recordCapacitySample(vaultId, 53);
-
-            const samples = getRecentSamples(vaultId, 5);
-
-            expect(samples.length).toBe(5);
-            expect(samples[3].isOutlier).toBe(true); // The 95 should be flagged as outlier
-        });
-
-        it('smooths utilization by filtering outliers', () => {
-            const vaultId = 'vault_smooth_2';
-
-            // Record steady state
-            recordCapacitySample(vaultId, 40);
-            recordCapacitySample(vaultId, 41);
-            recordCapacitySample(vaultId, 40);
-            recordCapacitySample(vaultId, 42);
-            recordCapacitySample(vaultId, 40);
-
-            const smoothed = getSmoothedUtilization(vaultId);
-
-            // Smoothed value should be close to 40-42, not affected by noise
-            expect(smoothed).toBeGreaterThan(39);
-            expect(smoothed).toBeLessThan(43);
-        });
-
-        it('handles all-outlier scenario gracefully', () => {
-            const vaultId = 'vault_smooth_3';
-
-            recordCapacitySample(vaultId, 30);
-            recordCapacitySample(vaultId, 85);
-            recordCapacitySample(vaultId, 15);
-
-            const smoothed = getSmoothedUtilization(vaultId);
-
-            // Should still return a value (the last raw value if all are outliers)
-            expect(smoothed).toBeGreaterThanOrEqual(0);
-            expect(smoothed).toBeLessThanOrEqual(200);
-        });
-
-        it('preserves raw samples for audit trail', () => {
-            const vaultId = 'vault_audit_1';
-
-            recordCapacitySample(vaultId, 50);
-            recordCapacitySample(vaultId, 55);
-            recordCapacitySample(vaultId, 100); // Outlier
-
-            const samples = getRecentSamples(vaultId);
-
-            expect(samples.length).toBeGreaterThan(0);
-            expect(samples[0].rawValue).toBe(true);
-            expect(samples.every(s => s.timestamp > 0)).toBe(true);
-        });
-
-        it('includes smoothed utilization in capacity status', () => {
-            const inputs: CapacityInputs = {
-                tvl: BigInt(4000000),
-                liquidityDepth: BigInt(5000000),
-                maxDepositSize: BigInt(500000),
-                softCapacity: BigInt(10000000),
-            };
-
-            const status = calculateCapacityStatus('vault_status_smooth', inputs);
-
-            expect(status.smoothedUtilization).toBeDefined();
-            expect(status.recentSamples).toBeDefined();
-            expect(status.recentSamples.length).toBeGreaterThanOrEqual(0);
         });
     });
 });

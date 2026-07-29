@@ -20,129 +20,13 @@ export interface RecoveryRecommendation {
   reasoning: string;
   steps: string[];
   riskLevel: "LOW" | "MEDIUM" | "HIGH";
-  tieBreaker?: {
-    reason: string; // Why this recommendation won in a tie
-    priority: number; // Numeric score for deterministic ordering
-  };
 }
-
-/**
- * Path priority for tie-breaking (lower number = higher priority)
- */
-const PATH_PRIORITY: Record<RecoveryPath, number> = {
-  UNWIND: 0,    // Highest priority - most defensive
-  ROTATE: 1,
-  REBALANCE: 2,
-  HOLD: 3,      // Lowest priority - least disruptive
-};
-
-/**
- * Risk level priority for tie-breaking (lower number = lower risk preferred)
- */
-const RISK_LEVEL_PRIORITY: Record<string, number> = {
-  LOW: 0,
-  MEDIUM: 1,
-  HIGH: 2,
-};
 
 export class RecoveryRecommendationService {
   private guardrails: { evaluateGuardrails: (ctx: GuardrailContext) => { passed: boolean } };
 
   constructor(guardrails?: { evaluateGuardrails: (ctx: GuardrailContext) => { passed: boolean } }) {
     this.guardrails = guardrails || (createGuardrailsService() as unknown as { evaluateGuardrails: (ctx: GuardrailContext) => { passed: boolean } });
-  }
-
-  /**
-   * Calculate a stable tie-breaker score for deterministic ranking
-   * Lower scores have higher priority
-   */
-  private calculateTieBreakerScore(rec: RecoveryRecommendation): number {
-    let score = 0;
-
-    // Primary: path priority (0-30 points)
-    score += PATH_PRIORITY[rec.path] * 10;
-
-    // Secondary: risk level (0-20 points)
-    score += RISK_LEVEL_PRIORITY[rec.riskLevel] * 7;
-
-    // Tertiary: step simplicity - prefer fewer steps (0-10 points)
-    score += Math.min(rec.steps.length, 10);
-
-    // Quaternary: path name alphabetically (0-5 points for tie-breaking)
-    const pathIndex = Object.keys(PATH_PRIORITY).indexOf(rec.path);
-    score += pathIndex * 0.5;
-
-    return score;
-  }
-
-  /**
-   * Rank recommendations with stable tie-breaking for equal confidence scores
-   */
-  private rankRecommendations(recommendations: RecoveryRecommendation[]): RecoveryRecommendation[] {
-    // Group by confidence level
-    const grouped = new Map<number, RecoveryRecommendation[]>();
-    for (const rec of recommendations) {
-      const key = Math.round(rec.confidence * 100); // Round to 2 decimal places
-      if (!grouped.has(key)) {
-        grouped.set(key, []);
-      }
-      grouped.get(key)!.push(rec);
-    }
-
-    // Sort each group by tie-breaker score and apply tie-breaker info
-    const ranked: RecoveryRecommendation[] = [];
-    for (const [, recs] of grouped) {
-      if (recs.length === 1) {
-        ranked.push(recs[0]);
-      } else {
-        // Multiple recommendations with same confidence - apply tie-breaking
-        const sorted = recs.map(rec => ({
-          rec,
-          score: this.calculateTieBreakerScore(rec),
-        }))
-        .sort((a, b) => a.score - b.score);
-
-        for (let i = 0; i < sorted.length; i++) {
-          const item = sorted[i];
-          const tieBreaker = {
-            reason: this.getTieBreakerReason(item.rec, i, sorted.length),
-            priority: item.score,
-          };
-          ranked.push({
-            ...item.rec,
-            tieBreaker,
-          });
-        }
-      }
-    }
-
-    // Sort by confidence descending (highest confidence first), then by tie-breaker score
-    return ranked.sort((a, b) => {
-      const confidenceDiff = b.confidence - a.confidence;
-      if (Math.abs(confidenceDiff) > 0.001) {
-        return confidenceDiff;
-      }
-      return (a.tieBreaker?.priority ?? Infinity) - (b.tieBreaker?.priority ?? Infinity);
-    });
-  }
-
-  /**
-   * Generate human-readable explanation for why a recommendation won a tie
-   */
-  private getTieBreakerReason(rec: RecoveryRecommendation, rank: number, total: number): string {
-    if (total === 1) {
-      return "Only recommendation for this confidence level";
-    }
-
-    const reasons = [];
-    reasons.push(`Ranked #${rank + 1} of ${total} with same confidence`);
-    reasons.push(`Path priority: ${rec.path}`);
-    reasons.push(`Risk: ${rec.riskLevel}`);
-    if (rec.steps.length <= 3) {
-      reasons.push("Simpler execution (fewer steps)");
-    }
-
-    return reasons.join(" | ");
   }
 
   async evaluateRecoveryOptions(
@@ -172,8 +56,7 @@ export class RecoveryRecommendationService {
         recommendations.push(this.getDefaultRecommendation(event));
     }
 
-    // Rank recommendations with stable tie-breaking
-    return this.rankRecommendations(recommendations);
+    return recommendations;
   }
 
   private handleApyCrash(event: ShockEvent, healthPassed: boolean): RecoveryRecommendation[] {

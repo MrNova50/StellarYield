@@ -1,10 +1,10 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { FreshnessBanner } from "../FreshnessBanner";
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 
 describe("FreshnessBanner", () => {
   beforeAll(() => {
+    // Mock Date.now to keep time stable for tests
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-28T09:20:00Z"));
   });
@@ -14,6 +14,7 @@ describe("FreshnessBanner", () => {
   });
 
   it("renders fresh active state when lastUpdated is recent and confidence is high", () => {
+    // Sync 1 minute ago (60000ms ago) -> should be fresh
     const oneMinAgo = new Date(Date.now() - 60 * 1000).toISOString();
     render(<FreshnessBanner lastUpdated={oneMinAgo} confidence={0.95} />);
 
@@ -43,57 +44,5 @@ describe("FreshnessBanner", () => {
   it("handles invalid timestamp gracefully with error banner", () => {
     render(<FreshnessBanner lastUpdated="invalid-date-string" />);
     expect(screen.getByText("Invalid timestamp provided for data freshness check.")).toBeInTheDocument();
-  });
-
-  describe("cache mode", () => {
-    it("renders cache banner with age and confidence", () => {
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      render(<FreshnessBanner source="cache" lastUpdated={fiveMinAgo} confidence={0.95} />);
-
-      expect(screen.getByText("Showing Cached Data")).toBeInTheDocument();
-      expect(screen.getByText(/Cached:/)).toBeInTheDocument();
-      expect(screen.getByText("Cached")).toBeInTheDocument();
-    });
-
-    it("renders stale cache banner when data age exceeds hard stale threshold", () => {
-      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      render(<FreshnessBanner source="cache" lastUpdated={oneHourAgo} />);
-
-      expect(screen.getByText("Stale Cached Data")).toBeInTheDocument();
-      expect(screen.getByText("Stale Cache")).toBeInTheDocument();
-    });
-
-    it("renders refresh button when onRefresh is provided", () => {
-      const onRefresh = vi.fn();
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      render(
-        <FreshnessBanner source="cache" lastUpdated={fiveMinAgo} confidence={0.95} onRefresh={onRefresh} />,
-      );
-
-      const refreshButton = screen.getByRole("button", {
-        name: /refresh data from live api/i,
-      });
-      expect(refreshButton).toBeInTheDocument();
-    });
-
-    it("calls onRefresh when refresh button is clicked", () => {
-      const onRefresh = vi.fn();
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      render(
-        <FreshnessBanner source="cache" lastUpdated={fiveMinAgo} confidence={0.95} onRefresh={onRefresh} />,
-      );
-
-      screen.getByRole("button", { name: /refresh data from live api/i }).click();
-      expect(onRefresh).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not render refresh button when onRefresh is omitted", () => {
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      render(<FreshnessBanner source="cache" lastUpdated={fiveMinAgo} confidence={0.95} />);
-
-      expect(
-        screen.queryByRole("button", { name: /refresh data from live api/i }),
-      ).toBeNull();
-    });
   });
 });

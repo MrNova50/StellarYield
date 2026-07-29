@@ -7,18 +7,6 @@ export const MAX_PROOF_DEPTH = 20;
 export const MAX_BATCH_ENTRIES = 10_000;
 
 /**
- * Compute an idempotency key for a reward claim.
- *
- * The key is a SHA-256 hash of `{epoch}:{claimant}:{amount}`, uniquely
- * identifying a claim attempt. The same inputs always produce the same
- * key, enabling safe retry without double-claim risk.
- */
-export function computeIdempotencyKey(epoch: number, claimant: string, amount: string): string {
-  const input = `${epoch}:${claimant}:${amount}`;
-  return createHash("sha256").update(input).digest("hex");
-}
-
-/**
  * Validate that a proof array does not exceed the maximum allowed depth.
  * Returns an object so callers can surface a human-readable reason.
  */
