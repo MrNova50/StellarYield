@@ -47,6 +47,30 @@ export interface SimulationResult {
   }>;
 }
 
+export function isValidAllocationPayload(allocations: unknown): boolean {
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    return false;
+  }
+
+  for (const item of allocations) {
+    if (!item || typeof item !== 'object') return false;
+    const p = item as Record<string, unknown>;
+    if (typeof p.vaultId !== 'string' || p.vaultId.trim().length === 0) return false;
+    if (typeof p.vaultName !== 'string') return false;
+    if (!Number.isFinite(p.allocationPct)) return false;
+    if (!Number.isFinite(p.apy)) return false;
+    if (!Number.isFinite(p.tvlUsd)) return false;
+    if (!Number.isFinite(p.riskScore)) return false;
+    if (!Number.isFinite(p.rotationCostPct)) return false;
+  }
+
+  const totalPct = (allocations as Array<{ allocationPct: number }>).reduce(
+    (sum, item) => sum + (item.allocationPct || 0),
+    0,
+  );
+  return Math.abs(totalPct - 100) <= 0.01;
+}
+
 export class TreasuryValidationError extends Error {
   constructor(
     public readonly code: string,

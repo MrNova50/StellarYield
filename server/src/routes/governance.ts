@@ -29,6 +29,10 @@ const VALID_PROPOSAL_TYPES: ProposalType[] = [
  * Returns an estimated impact forecast for a governance proposal.
  * Read-only — does not execute any on-chain operation.
  */
+router.get("/forecast", (_req: Request, res: Response) => {
+  res.json({ message: "Use POST /api/governance/forecast to submit forecast inputs." });
+});
+
 router.post("/forecast", forecastLimiter, (req: Request, res: Response) => {
   const { proposalType, parameters, baseline } = req.body as Partial<GovernanceForecastInput>;
 
