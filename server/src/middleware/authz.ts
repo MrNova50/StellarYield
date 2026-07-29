@@ -12,11 +12,16 @@ export function requireRole(...allowedRoles: string[]) {
       | { role?: string }
       | undefined;
 
-    if (!user || !user.role || !allowedRoles.includes(user.role)) {
-      res.status(user ? 403 : 401).json({
-        error: user
-          ? "Forbidden: insufficient role"
-          : "Unauthorized: authentication required",
+    if (!user) {
+      res.status(401).json({
+        error: "Unauthorized: authentication required",
+      });
+      return;
+    }
+
+    if (!user.role || !allowedRoles.includes(user.role)) {
+      res.status(403).json({
+        error: "Unauthorized: Admin access required",
       });
       return;
     }

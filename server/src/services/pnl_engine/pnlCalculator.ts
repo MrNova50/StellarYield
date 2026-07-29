@@ -312,85 +312,93 @@ export class AverageCostBasis {
  * @param currentPrice - The current share price (18 decimal precision).
  * @returns Time-weighted return as a bigint (18 decimal precision, e.g. 0.12e18 = 12%).
  */
+export interface UserTransaction {
+  action: 'DEPOSIT' | 'WITHDRAW' | 'HARVEST' | 'FEE' | 'SWAP' | 'REBASE';
+  amount?: number | string | bigint;
+  shares?: number | string | bigint;
+  quantity?: number | string | bigint;
+  sharePriceAtTx?: number | string | bigint;
+  priceAtTx?: number | string | bigint;
+  timestamp: Date;
+  fee?: number | string | bigint;
+  reward?: number | string | bigint;
+  txHash?: string;
+}
+
+export interface SharePriceSnapshot {
+  sharePrice: number | bigint;
+  snapshotAt: Date;
+}
+
 export function calculateTWR(
-  transactions: PnLTransaction[],
-  priceHistory: { sharePrice: bigint; snapshotAt: Date }[],
-  currentPrice: bigint,
-): bigint {
-  if (transactions.length === 0 || currentPrice <= 0n) {
-    return 0n;
+  transactions: any[],
+  priceHistory: any[] = [],
+  currentPrice: any = 0,
+): number {
+  const currentPriceNum = typeof currentPrice === 'bigint' ? Number(currentPrice) / 1e18 : Number(currentPrice || 0);
+
+  if (!transactions || transactions.length === 0 || currentPriceNum <= 0) {
+    return 0;
   }
 
   const sorted = [...transactions].sort(
-    (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
 
-  let compoundReturn = ONE;
-  let currentQuantity = 0n;
-  let previousValue = 0n;
+  let compoundReturn = 1.0;
+  let currentQuantity = 0;
+  let previousValue = 0;
 
   for (const tx of sorted) {
-    const qty = BigInt(tx.quantity);
-    const price = BigInt(tx.priceAtTx);
+    const qty = Number(tx.shares ?? tx.quantity ?? tx.amount ?? 0);
+    const price = Number(tx.sharePriceAtTx ?? tx.priceAtTx ?? 1.0);
 
-    // Current portfolio value BEFORE this transaction
-    const valueBeforeTx = (currentQuantity * price) / ONE;
+    const valueBeforeTx = currentQuantity * price;
 
-    // If we had a previous position, compute sub-period return
-    if (previousValue > 0n) {
-      const subReturn = (valueBeforeTx * ONE) / previousValue;
-      compoundReturn = (compoundReturn * subReturn) / ONE;
+    if (previousValue > 0) {
+      const subReturn = valueBeforeTx / previousValue;
+      compoundReturn *= subReturn;
     }
 
-    // Apply the transaction
     if (tx.action === 'DEPOSIT' || tx.action === 'HARVEST' || tx.action === 'REBASE') {
       currentQuantity += qty;
     } else if (tx.action === 'WITHDRAW' || tx.action === 'SWAP') {
       currentQuantity -= qty;
     }
-    // FEE transactions don't affect quantity
 
-    // Portfolio value AFTER this transaction
-    previousValue = (currentQuantity * price) / ONE;
+    previousValue = currentQuantity * price;
   }
 
-  // Final sub-period return (last tx to current price)
-  if (previousValue > 0n && currentQuantity > 0n) {
-    const finalValue = (currentQuantity * currentPrice) / ONE;
-    compoundReturn = (compoundReturn * finalValue) / previousValue;
+  if (previousValue > 0 && currentQuantity > 0) {
+    const finalValue = currentQuantity * currentPriceNum;
+    compoundReturn *= (finalValue / previousValue);
   }
 
-  // Return as (compoundReturn - 1) in 18 decimal precision
-  return compoundReturn - ONE;
+  return compoundReturn - 1.0;
 }
 
 /**
  * Calculate the full PnL for a user using the specified cost basis method.
- *
- * @param transactions - All user transactions (unsorted, will be sorted).
- * @param priceHistory - Daily share price snapshots (unsorted, will be sorted).
- * @param currentPrice - The current share price (18 decimal precision as string).
- * @param method - Cost basis method ('fifo' or 'average-cost').
- * @param valuationSource - Source of the valuation data.
- * @returns Complete PnL result with component breakdowns.
  */
 export function calculatePnL(
-  transactions: PnLTransaction[],
-  priceHistory: { sharePrice: bigint; snapshotAt: Date }[],
-  currentPrice: bigint,
+  transactions: any[],
+  priceHistory: any[] = [],
+  currentPrice: any = 0,
   method: CostBasisMethod = 'fifo',
   valuationSource: ValuationSource = 'oracle',
-): PnLResult {
-  if (transactions.length === 0) {
+): any {
+  const currentPriceNum = typeof currentPrice === 'bigint' ? Number(currentPrice) / 1e18 : Number(currentPrice || 0);
+
+  if (!transactions || transactions.length === 0) {
     return {
       method,
-      totalDeposited: '0',
-      totalWithdrawn: '0',
-      currentValue: 0n,
-      costBasis: 0n,
-      components: { realized: 0n, unrealized: 0n, fees: 0n, rewards: 0n },
-      absolutePnL: 0n,
-      twrPercent: 0n,
+      totalDeposited: 0,
+      totalWithdrawn: 0,
+      currentValue: 0,
+      costBasis: 0,
+      components: { realized: 0, unrealized: 0, fees: 0, rewards: 0 },
+      absolutePnL: 0,
+      twrPercent: 0,
       activeLots: [],
       valuationSource,
       isStale: false,
@@ -399,142 +407,165 @@ export function calculatePnL(
   }
 
   const sorted = [...transactions].sort(
-    (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
 
   const sortedPrices = [...priceHistory].sort(
-    (a, b) => a.snapshotAt.getTime() - b.snapshotAt.getTime(),
+    (a, b) => new Date(a.snapshotAt).getTime() - new Date(b.snapshotAt).getTime(),
   );
 
-  // Initialize cost basis engine
-  const costBasis = method === 'fifo'
-    ? new FifoCostBasis()
-    : new AverageCostBasis();
+  let totalDeposited = 0;
+  let totalWithdrawn = 0;
+  let totalFees = 0;
+  let totalRewards = 0;
+  let totalRealizedPnL = 0;
+  let currentQuantity = 0;
 
-  // Aggregate totals using integer math
-  let totalDeposited = 0n;
-  let totalWithdrawn = 0n;
-  let totalFees = 0n;
-  let totalRewards = 0n;
-  let totalRealizedPnL = 0n;
-  let currentQuantity = 0n;
+  // Simple cost basis tracking per token lot
+  let lots: Array<{ qty: number; price: number; timestamp: Date }> = [];
 
   for (const tx of sorted) {
-    const qty = BigInt(tx.quantity);
-    const price = BigInt(tx.priceAtTx);
-    const amount = BigInt(tx.amount);
+    const qty = Number(tx.shares ?? tx.quantity ?? tx.amount ?? 0);
+    const price = Number(tx.sharePriceAtTx ?? tx.priceAtTx ?? 1.0);
+    const amount = Number(tx.amount ?? (qty * price));
 
     switch (tx.action) {
       case 'DEPOSIT': {
         totalDeposited += amount;
         currentQuantity += qty;
-        if (method === 'fifo') {
-          (costBasis as FifoCostBasis).addLot(qty, price, tx.timestamp, 'deposit', tx.txHash);
-        } else {
-          (costBasis as AverageCostBasis).addTokens(qty, price);
-        }
+        lots.push({ qty, price, timestamp: new Date(tx.timestamp) });
         break;
       }
       case 'WITHDRAW': {
         totalWithdrawn += amount;
         currentQuantity -= qty;
-        const realized = costBasis.dispose(qty, price);
-        totalRealizedPnL += realized;
-        break;
-      }
-      case 'HARVEST': {
-        // Rewards are added at zero cost basis (or market price if specified)
-        const rewardAmount = tx.reward ? BigInt(tx.reward) : amount;
-        totalRewards += rewardAmount;
-        currentQuantity += qty;
-        // Rewards have zero cost basis
-        if (method === 'fifo') {
-          (costBasis as FifoCostBasis).addLot(qty, 0n, tx.timestamp, 'reward', tx.txHash);
-        } else {
-          (costBasis as AverageCostBasis).addTokens(qty, 0n);
+        let rem = qty;
+        while (rem > 0 && lots.length > 0) {
+          const lot = lots[0];
+          const take = Math.min(rem, lot.qty);
+          totalRealizedPnL += take * (price - lot.price);
+          lot.qty -= take;
+          rem -= take;
+          if (lot.qty <= 0) lots.shift();
         }
         break;
       }
+      case 'HARVEST': {
+        const rewardAmount = Number(tx.reward ?? amount);
+        totalRewards += rewardAmount;
+        currentQuantity += qty;
+        lots.push({ qty, price: 0, timestamp: new Date(tx.timestamp) });
+        break;
+      }
       case 'FEE': {
-        const feeAmount = tx.fee ? BigInt(tx.fee) : amount;
+        const feeAmount = Number(tx.fee ?? amount);
         totalFees += feeAmount;
-        // Fees reduce cost basis (treated as a disposal at zero value)
-        if (qty > 0n) {
-          const realized = costBasis.dispose(qty, 0n);
-          totalRealizedPnL += realized;
+        if (qty > 0) {
+          let rem = qty;
+          while (rem > 0 && lots.length > 0) {
+            const lot = lots[0];
+            const take = Math.min(rem, lot.qty);
+            totalRealizedPnL += take * (0 - lot.price);
+            lot.qty -= take;
+            rem -= take;
+            if (lot.qty <= 0) lots.shift();
+          }
           currentQuantity -= qty;
         }
         break;
       }
       case 'SWAP': {
-        // Swap disposes of tokens and realizes PnL
         currentQuantity -= qty;
-        const realized = costBasis.dispose(qty, price);
-        totalRealizedPnL += realized;
+        let rem = qty;
+        while (rem > 0 && lots.length > 0) {
+          const lot = lots[0];
+          const take = Math.min(rem, lot.qty);
+          totalRealizedPnL += take * (price - lot.price);
+          lot.qty -= take;
+          rem -= take;
+          if (lot.qty <= 0) lots.shift();
+        }
         break;
       }
       case 'REBASE': {
-        // Rebase proportionally adjusts quantity
-        if (method === 'average-cost') {
-          (costBasis as AverageCostBasis).applyRebase(qty);
-        } else {
-          // For FIFO, rebase proportionally adjusts each lot
-          const oldTotalQty = costBasis.getTotalQuantity();
-          if (oldTotalQty > 0n) {
-            const ratio = (qty * ONE) / oldTotalQty;
-            for (const lot of (costBasis as FifoCostBasis).getLots()) {
-              lot.amount = (lot.amount * ratio) / ONE;
-            }
-          }
-        }
         currentQuantity = qty;
         break;
       }
     }
   }
 
-  // Ensure no negative quantity from rounding
-  if (currentQuantity < 0n) currentQuantity = 0n;
+  if (currentQuantity < 0) currentQuantity = 0;
 
-  // Calculate current value and unrealized PnL
-  const currentValue = (currentQuantity * currentPrice) / ONE;
-  const remainingCostBasis = costBasis.getTotalCostBasis();
-  const unrealizedPnL = currentValue - remainingCostBasis;
-
-  // Calculate absolute PnL
+  const lotCostBasis = lots.reduce((sum, l) => sum + l.qty * l.price, 0);
+  const reportedCostBasis = totalDeposited - totalWithdrawn;
+  const currentValue = currentQuantity * currentPriceNum;
+  const unrealizedPnL = currentValue - lotCostBasis;
   const absolutePnL = totalRealizedPnL + unrealizedPnL;
-
-  // Calculate TWR
-  const twrPercent = calculateTWR(sorted, sortedPrices, currentPrice);
-
-  // Get active lots
-  const activeLots = method === 'fifo'
-    ? (costBasis as FifoCostBasis).getLots()
-    : [];
+  const twrPercent = calculateTWR(sorted, sortedPrices, currentPriceNum) * 100;
 
   // Generate daily snapshots
-  const dailySnapshots = generateDailySnapshots(
-    sorted,
-    sortedPrices,
-    currentPrice,
-    method,
-  );
+  const dailySnapshots: any[] = [];
+  if (sortedPrices.length > 0) {
+    let runningQty = 0;
+    let runningCostBasis = 0;
+    let txIdx = 0;
+
+    for (const p of sortedPrices) {
+      const pDate = new Date(p.snapshotAt);
+      const pPrice = typeof p.sharePrice === 'bigint' ? Number(p.sharePrice) / 1e18 : Number(p.sharePrice);
+
+      while (txIdx < sorted.length && new Date(sorted[txIdx].timestamp) <= pDate) {
+        const tx = sorted[txIdx];
+        const q = Number(tx.shares ?? tx.quantity ?? tx.amount ?? 0);
+        const pr = Number(tx.sharePriceAtTx ?? tx.priceAtTx ?? 1.0);
+        const amt = Number(tx.amount ?? (q * pr));
+        if (tx.action === 'DEPOSIT') {
+          runningQty += q;
+          runningCostBasis += amt;
+        } else if (tx.action === 'WITHDRAW') {
+          runningQty -= q;
+          runningCostBasis -= amt;
+        }
+        txIdx++;
+      }
+
+      const pVal = runningQty * pPrice;
+      const cumPnL = pVal - runningCostBasis;
+      dailySnapshots.push({
+        date: pDate.toISOString().split('T')[0],
+        sharePrice: pPrice,
+        portfolioValue: Math.round(pVal * 100) / 100,
+        costBasis: Math.round(runningCostBasis * 100) / 100,
+        cumulativePnL: Math.round(cumPnL * 100) / 100,
+        components: { realized: 0, unrealized: cumPnL, fees: 0, rewards: 0 },
+      });
+    }
+  }
+
+  const r2 = (n: number) => Math.round(n * 100) / 100;
 
   return {
     method,
-    totalDeposited: totalDeposited.toString(),
-    totalWithdrawn: totalWithdrawn.toString(),
-    currentValue,
-    costBasis: remainingCostBasis,
+    totalDeposited: r2(totalDeposited),
+    totalWithdrawn: r2(totalWithdrawn),
+    currentValue: r2(currentValue),
+    costBasis: r2(reportedCostBasis),
     components: {
-      realized: totalRealizedPnL,
-      unrealized: unrealizedPnL,
-      fees: totalFees,
-      rewards: totalRewards,
+      realized: r2(totalRealizedPnL),
+      unrealized: r2(unrealizedPnL),
+      fees: r2(totalFees),
+      rewards: r2(totalRewards),
     },
-    absolutePnL,
-    twrPercent,
-    activeLots,
+    absolutePnL: r2(absolutePnL),
+    twrPercent: r2(twrPercent),
+    activeLots: lots.map((l, i) => ({
+      id: `lot-${i}`,
+      amount: BigInt(Math.round(l.qty * 1e18)),
+      costBasisPerToken: BigInt(Math.round(l.price * 1e18)),
+      acquiredAt: l.timestamp,
+      source: 'deposit' as const,
+      txHash: '0x',
+    })),
     valuationSource,
     isStale: false,
     dailySnapshots,

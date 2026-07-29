@@ -118,12 +118,6 @@ function logAudit(metadata: {
     console.error(line);
   } else {
     console.log(line);
-const LLM_TIMEOUT_MS = 15_000;
-const LLM_MAX_RETRIES = 2;
-
-async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-  if (!LLM_API_KEY) {
-    throw new Error("No LLM API key configured (set GEMINI_API_KEY or OPENAI_API_KEY)");
   }
 }
 
@@ -164,7 +158,7 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
       result = data.choices[0].message.content;
     } else {
       // Default: Google Gemini
-      const res = await fetch(
+      const res = await resilientFetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
         {
           method: "POST",
@@ -174,6 +168,8 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
             generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
           }),
         },
+        "gemini-risk-agent",
+        { timeoutMs: 10_000, maxRetries: 1 },
       );
       if (!res.ok) {
         throw new Error("Gemini API failed with status " + res.status);

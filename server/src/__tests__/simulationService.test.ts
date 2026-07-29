@@ -1,9 +1,9 @@
-import { simulateDeposit } from "../services/simulationService";
 import {
   SIMULATOR_FIXTURES,
   SIMULATOR_EDGE_CASES,
   validateSimulationResult,
-} from "../../shared/test-fixtures/simulatorFixtures";
+  type SimulatorFixture,
+} from "../../../shared/test-fixtures/simulatorFixtures";
 import {
   simulateRebalance,
   validateRebalanceParams,
@@ -58,13 +58,14 @@ describe("Simulation Service", () => {
       token: "USDC",
     });
 
+    expect(result0.warnings.some((w) => w.includes("greater than zero"))).toBe(true);
     expect(result0.warnings.some((w: SimulationWarning) => w.code === "ZERO_AMOUNT")).toBe(true);
   });
 });
 
 describe("Simulation Service - Shared Fixture Tests", () => {
   describe("Basic fixtures - Deterministic Simulator Validation", () => {
-    SIMULATOR_FIXTURES.forEach((fixture) => {
+    SIMULATOR_FIXTURES.forEach((fixture: SimulatorFixture) => {
       it(`should handle: ${fixture.description}`, () => {
         const result = simulateDeposit(fixture.input);
 
@@ -84,7 +85,7 @@ describe("Simulation Service - Shared Fixture Tests", () => {
   });
 
   describe("Edge cases - Regression Coverage", () => {
-    SIMULATOR_EDGE_CASES.forEach((fixture) => {
+    SIMULATOR_EDGE_CASES.forEach((fixture: SimulatorFixture) => {
       it(`should handle: ${fixture.description}`, () => {
         const result = simulateDeposit(fixture.input);
 
@@ -261,6 +262,7 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
+      expect(result.warnings.some((w) => w.includes("greater than zero"))).toBe(true);
       const w = result.warnings.find((w: SimulationWarning) => w.code === "ZERO_AMOUNT");
       expect(w).toBeDefined();
       expect(w!.severity).toBe("critical");
@@ -273,6 +275,7 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
+      expect(result.warnings.some((w) => w.includes("greater than zero"))).toBe(true);
       const w = result.warnings.find((w: SimulationWarning) => w.code === "ZERO_AMOUNT");
       expect(w).toBeDefined();
     });
@@ -445,6 +448,8 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         });
       }).not.toThrow();
     });
+  });
+
 describe("Rebalance Simulation Sandbox", () => {
   const evenToConcentrated: RebalanceParams = {
     totalValueUsd: 10_000,
@@ -534,4 +539,5 @@ describe("Rebalance Simulation Sandbox", () => {
       simulateRebalance({ totalValueUsd: -1, allocations: [] }),
     ).toThrow(/Invalid rebalance parameters/);
   });
+});
 });

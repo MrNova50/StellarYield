@@ -156,8 +156,8 @@ export function paginateVaultActivity(opts: PaginateOptions): VaultActivityPage 
   const page = slice.slice(0, pageSize);
 
   const nextCursor =
-    slice.length > pageSize
-      ? encodeCursor(cursorPositionOf(slice[pageSize]))
+    slice.length > pageSize && page.length > 0
+      ? encodeCursor(cursorPositionOf(page[page.length - 1]))
       : null;
 
   const prevCursor = opts.afterCursor && page.length > 0
