@@ -1,6 +1,9 @@
 import { Router, Request, Response } from "express";
 import {
   simulateTreasury,
+  compareTreasuryScenarios,
+  exportComparisonJSON,
+  exportComparisonCSV,
   saveScenario,
   getScenario,
   listScenarios,
@@ -8,15 +11,20 @@ import {
   assertValidScenarioInput,
   previewImport,
   TreasuryValidationError,
-  type TreasuryScenario,
-  type AllocationPosition,
-  type CashflowRow,
-  type CashflowImportPreview,
 } from "../services/treasurySimulationService";
 import { successEnvelope, errorEnvelope } from "../types/envelope";
 
 const router = Router();
 
+// #935 — treasury simulation/mutation endpoints are compute- and storage-heavy;
+// rate-limit to prevent burst abuse with a clear 429 error response.
+const treasuryMutationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many treasury requests. Please try again later." },
+});
 function validateAllocations(allocations: unknown): allocations is AllocationPosition[] {
   if (!Array.isArray(allocations) || allocations.length === 0) return false;
   const total = (allocations as AllocationPosition[]).reduce(
@@ -66,6 +74,75 @@ router.post("/simulate", (req: Request, res: Response) => {
     }
     res.status(400).json(
       errorEnvelope("INVALID_REQUEST", "Invalid request body", "treasury/simulate"),
+    );
+  }
+});
+
+/**
+ * POST /api/treasury/compare
+ * Run scenario comparison for baseline versus selected stress runs.
+ */
+router.post("/compare", treasuryMutationLimiter, (req: Request, res: Response) => {
+  try {
+    const scenario = assertValidScenarioInput({
+      ...req.body,
+      id: req.body.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    const stressRunIds = Array.isArray(req.body.stressRunIds) ? req.body.stressRunIds : undefined;
+    const comparison = compareTreasuryScenarios(scenario, stressRunIds);
+    const warnings = comparison.summary.totalWarningsCount > 0
+      ? comparison.baseline.warnings
+      : undefined;
+
+    res.json(successEnvelope(comparison, "treasury/compare", warnings));
+  } catch (err) {
+    if (err instanceof TreasuryValidationError) {
+      res.status(err.statusCode).json(
+        errorEnvelope(err.code, err.message, "treasury/compare", err.details),
+      );
+      return;
+    }
+    res.status(400).json(
+      errorEnvelope("INVALID_REQUEST", "Invalid request body", "treasury/compare"),
+    );
+  }
+});
+
+/**
+ * POST /api/treasury/export-comparison
+ * Export baseline versus stress scenario comparison in CSV or JSON format.
+ */
+router.post("/export-comparison", treasuryMutationLimiter, (req: Request, res: Response) => {
+  try {
+    const scenario = assertValidScenarioInput({
+      ...req.body,
+      id: req.body.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    const stressRunIds = Array.isArray(req.body.stressRunIds) ? req.body.stressRunIds : undefined;
+    const comparison = compareTreasuryScenarios(scenario, stressRunIds);
+    const format = String(req.body.format || "json").toLowerCase();
+
+    if (format === "csv") {
+      const csv = exportComparisonCSV(comparison);
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="treasury_scenario_comparison.csv"`);
+      res.status(200).send(csv);
+      return;
+    }
+
+    const jsonStr = exportComparisonJSON(comparison);
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", `attachment; filename="treasury_scenario_comparison.json"`);
+    res.status(200).send(jsonStr);
+  } catch (err) {
+    if (err instanceof TreasuryValidationError) {
+      res.status(err.statusCode).json(
+        errorEnvelope(err.code, err.message, "treasury/export-comparison", err.details),
+      );
+      return;
+    }
+    res.status(400).json(
+      errorEnvelope("INVALID_REQUEST", "Invalid request body", "treasury/export-comparison"),
     );
   }
 });

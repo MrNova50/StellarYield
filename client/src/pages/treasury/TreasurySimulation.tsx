@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Vault, TrendingUp, AlertTriangle, Save, RotateCcw, Info, Upload, FileText, Download, FileSpreadsheet, FileCode, Sliders, CheckSquare, Square } from "lucide-react";
 import { Vault, TrendingUp, AlertTriangle, AlertCircle, Info, Save, RotateCcw, Upload, FileText } from "lucide-react";
 import { FeeAssumptionsModal } from "../../components/FeeAssumptionsModal";
 import { apiUrl } from "../../lib/api";
@@ -35,6 +36,69 @@ interface SimResult {
   }>;
 }
 
+interface StressOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+const AVAILABLE_STRESS_RUNS: StressOption[] = [
+  { id: "yield-collapse", name: "Yield Collapse (-50% APY)", description: "50% APY haircut across all positions." },
+  { id: "liquidity-crunch", name: "Liquidity Crunch (+100% Cost, -50% TVL)", description: "2x rotation cost friction and 50% TVL drop." },
+  { id: "severe-crash", name: "Severe Market Crash (-70% APY, 3x Cost)", description: "70% yield loss and 3x rotation cost." },
+];
+
+interface StressRunResult {
+  stressId: string;
+  stressName: string;
+  description: string;
+  assumptions: {
+    apyMultiplier: number;
+    rotationCostMultiplier: number;
+    riskScoreMultiplier: number;
+    tvlMultiplier: number;
+  };
+  totals: {
+    projectedYieldPct: number;
+    projectedYieldUsd: number;
+    totalRotationCostUsd: number;
+    netYieldUsd: number;
+    liquidityRiskScore: number;
+    yieldDeltaUsd: number;
+    yieldDeltaPct: number;
+    riskScoreDelta: number;
+  };
+  warnings: string[];
+}
+
+interface ScenarioComparisonData {
+  exportedAt: string;
+  baseline: {
+    scenarioId: string;
+    scenarioName: string;
+    totalCapitalUsd: number;
+    assumptions: {
+      totalCapitalUsd: number;
+      allocationCount: number;
+      allocations: AllocationRow[];
+    };
+    totals: {
+      projectedYieldPct: number;
+      projectedYieldUsd: number;
+      totalRotationCostUsd: number;
+      netYieldUsd: number;
+      liquidityRiskScore: number;
+    };
+    warnings: string[];
+  };
+  stressRuns: StressRunResult[];
+  summary: {
+    worstCaseYieldUsd: number;
+    worstCaseNetYieldUsd: number;
+    maxYieldLossUsd: number;
+    maxYieldLossPct: number;
+    totalWarningsCount: number;
+  };
 // ── Structured warning renderer ─────────────────────────────────────────────
 
 const SEVERITY_ICON: Record<SimulationWarning["severity"], React.ReactElement> = {
@@ -81,6 +145,13 @@ const TreasurySimulation: React.FC = () => {
   const [totalCapital, setTotalCapital] = useState("1000000");
   const [allocations, setAllocations] = useState<AllocationRow[]>(DEFAULT_ALLOCATIONS);
   const [result, setResult] = useState<SimResult | null>(null);
+  const [selectedStressIds, setSelectedStressIds] = useState<string[]>([
+    "yield-collapse",
+    "liquidity-crunch",
+    "severe-crash",
+  ]);
+  const [comparisonResult, setComparisonResult] = useState<ScenarioComparisonData | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
   const [isFeeModalOpen, setIsFeeModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -183,6 +254,57 @@ const TreasurySimulation: React.FC = () => {
   }
 
   const totalPct = allocations.reduce((s, a) => s + a.allocationPct, 0);
+  const capitalNum = parseFloat(totalCapital);
+  const isCapitalValid = Number.isFinite(capitalNum) && capitalNum > 0;
+  const isAllocSumValid = Math.abs(totalPct - 100) <= 0.01;
+  const isSimulationValid = isCapitalValid && isAllocSumValid && allocations.length > 0;
+
+  function toggleStressRun(id: string) {
+    setSelectedStressIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  }
+
+  function downloadFile(content: string, filename: string, mimeType: string) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleExportComparison(format: "csv" | "json") {
+    if (!isSimulationValid) return;
+    const capital = parseFloat(totalCapital);
+    setExportLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/treasury/export-comparison"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: scenarioName,
+          totalCapitalUsd: capital,
+          allocations,
+          stressRunIds: selectedStressIds,
+          format,
+        }),
+      });
+      if (!res.ok) {
+        setError("Failed to export comparison");
+      } else {
+        const text = await res.text();
+        downloadFile(text, `treasury_scenario_comparison.${format}`, format === "csv" ? "text/csv" : "application/json");
+      }
+    } catch {
+      setError("Network error exporting comparison");
+    } finally {
+      setExportLoading(false);
+    }
+  }
 
   function updateAlloc(index: number, field: keyof AllocationRow, value: string | number) {
     setAllocations((prev) => {
@@ -220,7 +342,27 @@ const TreasurySimulation: React.FC = () => {
         const body = await res.json();
         setError(body.error ?? "Simulation failed");
       } else {
-        setResult(await res.json());
+        const simBody = await res.json();
+        setResult(simBody.data ?? simBody);
+
+        try {
+          const compRes = await fetch(apiUrl("/api/treasury/compare"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: scenarioName,
+              totalCapitalUsd: capital,
+              allocations,
+              stressRunIds: selectedStressIds,
+            }),
+          });
+          if (compRes.ok) {
+            const compBody = await compRes.json();
+            setComparisonResult(compBody.data ?? compBody);
+          }
+        } catch {
+          // ignore non-critical comparison fetch failure
+        }
       }
     } catch {
       setError("Network error");
@@ -577,6 +719,209 @@ const TreasurySimulation: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Scenario Comparison & Export */}
+      <div className="glass-panel p-6 space-y-6 border border-purple-500/20">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Sliders size={24} className="text-purple-400" />
+            <div>
+              <h3 className="text-xl font-bold text-white">Scenario Comparison Export</h3>
+              <p className="text-xs text-gray-400">
+                Compare baseline against stress scenarios and export full comparison reports.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleExportComparison("csv")}
+              disabled={!isSimulationValid || exportLoading}
+              title={
+                !isSimulationValid
+                  ? "Allocations must sum to 100% and capital > 0 to export"
+                  : "Export comparison as CSV"
+              }
+              className="px-4 py-2 bg-indigo-600/80 hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg flex items-center gap-2 transition-all shadow"
+            >
+              <FileSpreadsheet size={16} />
+              Export CSV
+            </button>
+            <button
+              onClick={() => handleExportComparison("json")}
+              disabled={!isSimulationValid || exportLoading}
+              title={
+                !isSimulationValid
+                  ? "Allocations must sum to 100% and capital > 0 to export"
+                  : "Export comparison as JSON"
+              }
+              className="px-4 py-2 bg-purple-600/80 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg flex items-center gap-2 transition-all shadow"
+            >
+              <FileCode size={16} />
+              Export JSON
+            </button>
+          </div>
+        </div>
+
+        {/* Stress Scenario Selection Toggles */}
+        <div className="space-y-2">
+          <label className="block text-xs uppercase font-semibold text-gray-400 tracking-wider">
+            Selected Stress Runs for Comparison
+          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {AVAILABLE_STRESS_RUNS.map((s) => {
+              const isSelected = selectedStressIds.includes(s.id);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => toggleStressRun(s.id)}
+                  className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all cursor-pointer ${
+                    isSelected
+                      ? "bg-purple-500/10 border-purple-500/40 text-white"
+                      : "bg-black/30 border-white/10 text-gray-400 hover:border-white/20"
+                  }`}
+                >
+                  <span className="mt-0.5 shrink-0 text-purple-400">
+                    {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+                  </span>
+                  <div>
+                    <p className="text-xs font-semibold text-white">{s.name}</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">{s.description}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {!isSimulationValid && (
+          <div className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+            <AlertTriangle size={14} className="text-yellow-400 shrink-0" />
+            <span className="text-xs text-yellow-300">
+              Scenario comparison export is disabled. Ensure total capital is &gt; 0 and allocation percentages sum to 100%.
+            </span>
+          </div>
+        )}
+
+        {comparisonResult && isSimulationValid && (
+          <div className="space-y-4 pt-2">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="glass-card p-4 border border-indigo-500/10">
+                <p className="text-xs text-gray-400 uppercase tracking-widest">Baseline Yield</p>
+                <p className="text-xl font-bold text-indigo-400">
+                  ${comparisonResult.baseline.totals.projectedYieldUsd.toLocaleString()}
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  {comparisonResult.baseline.totals.projectedYieldPct.toFixed(2)}% APY
+                </p>
+              </div>
+              <div className="glass-card p-4 border border-red-500/10">
+                <p className="text-xs text-gray-400 uppercase tracking-widest">Worst-Case Yield</p>
+                <p className="text-xl font-bold text-red-400">
+                  ${comparisonResult.summary.worstCaseYieldUsd.toLocaleString()}
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  Max Loss: {comparisonResult.summary.maxYieldLossPct.toFixed(1)}%
+                </p>
+              </div>
+              <div className="glass-card p-4 border border-yellow-500/10">
+                <p className="text-xs text-gray-400 uppercase tracking-widest">Worst-Case Net Yield</p>
+                <p className="text-xl font-bold text-yellow-400">
+                  ${comparisonResult.summary.worstCaseNetYieldUsd.toLocaleString()}
+                </p>
+                <p className="text-[11px] text-gray-500">After rotation costs</p>
+              </div>
+              <div className="glass-card p-4 border border-purple-500/10">
+                <p className="text-xs text-gray-400 uppercase tracking-widest">Total Warnings</p>
+                <p className="text-xl font-bold text-purple-300">
+                  {comparisonResult.summary.totalWarningsCount}
+                </p>
+                <p className="text-[11px] text-gray-500">Across evaluated runs</p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border border-white/10 rounded-xl">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="bg-white/5 text-gray-400 uppercase tracking-wider border-b border-white/10">
+                    <th className="py-2.5 px-3">Run Name</th>
+                    <th className="py-2.5 px-3 text-right">Yield (%)</th>
+                    <th className="py-2.5 px-3 text-right">Yield ($)</th>
+                    <th className="py-2.5 px-3 text-right">Rotation Cost ($)</th>
+                    <th className="py-2.5 px-3 text-right">Net Yield ($)</th>
+                    <th className="py-2.5 px-3 text-right">Risk Score</th>
+                    <th className="py-2.5 px-3 text-right">Yield Delta</th>
+                    <th className="py-2.5 px-3">Warnings</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  <tr className="bg-indigo-500/5 font-medium">
+                    <td className="py-2.5 px-3 text-white flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+                      {comparisonResult.baseline.scenarioName} (Baseline)
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-indigo-300">
+                      {comparisonResult.baseline.totals.projectedYieldPct.toFixed(2)}%
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-indigo-300 font-semibold">
+                      ${comparisonResult.baseline.totals.projectedYieldUsd.toLocaleString()}
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-gray-400">
+                      ${comparisonResult.baseline.totals.totalRotationCostUsd.toLocaleString()}
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-green-400 font-semibold">
+                      ${comparisonResult.baseline.totals.netYieldUsd.toLocaleString()}
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-gray-300">
+                      {comparisonResult.baseline.totals.liquidityRiskScore.toFixed(1)}/10
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-gray-500">—</td>
+                    <td className="py-2.5 px-3 text-gray-400">
+                      {comparisonResult.baseline.warnings.length} warning(s)
+                    </td>
+                  </tr>
+
+                  {comparisonResult.stressRuns.map((sr) => (
+                    <tr key={sr.stressId} className="hover:bg-white/5 transition-colors">
+                      <td className="py-2.5 px-3 text-gray-200">
+                        <span className="font-semibold">{sr.stressName}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-gray-300">
+                        {sr.totals.projectedYieldPct.toFixed(2)}%
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-white font-medium">
+                        ${sr.totals.projectedYieldUsd.toLocaleString()}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-yellow-400">
+                        ${sr.totals.totalRotationCostUsd.toLocaleString()}
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-medium ${sr.totals.netYieldUsd >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        ${sr.totals.netYieldUsd.toLocaleString()}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-gray-300">
+                        {sr.totals.liquidityRiskScore.toFixed(1)}/10
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-medium ${sr.totals.yieldDeltaUsd < 0 ? "text-red-400" : "text-gray-400"}`}>
+                        {sr.totals.yieldDeltaUsd === 0 ? "$0" : `${sr.totals.yieldDeltaUsd < 0 ? "" : "+"}$${sr.totals.yieldDeltaUsd.toLocaleString()} (${sr.totals.yieldDeltaPct.toFixed(1)}%)`}
+                      </td>
+                      <td className="py-2.5 px-3 text-yellow-300">
+                        {sr.warnings.length > 0 ? (
+                          <span title={sr.warnings.join("\n")}>
+                            {sr.warnings.length} warning(s)
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">None</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
       <FeeAssumptionsModal
         isOpen={isFeeModalOpen}
         onClose={() => setIsFeeModalOpen(false)}
