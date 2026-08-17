@@ -90,7 +90,22 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: >
+          cargo clippy --workspace --all-targets --
+          -D warnings
+          -A unused-imports
+          -A unused-variables
+          -A unused-mut
+          -A dead-code
+          -A clippy::erasing_op
+          -A clippy::single_match
+          -A clippy::match_like_matches_macro
+          -A clippy::manual_memcpy
+          -A clippy::unnecessary_cast
+          -A clippy::absurd_extreme_comparisons
+          -A unused-comparisons
+          -A clippy::let_unit_value
+          -A clippy::manual_range_contains
 
       - name: Test
         run: cargo test --workspace

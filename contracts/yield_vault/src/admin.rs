@@ -1,41 +1,8 @@
-use crate::{events, DataKey, VaultError, YieldVault};
-use soroban_sdk::{symbol_short, xdr::ToXdr, Address, Bytes, Env};
+use crate::{DataKey, VaultError, YieldVault, YieldVaultArgs, YieldVaultClient};
+use soroban_sdk::{contractimpl, symbol_short, xdr::ToXdr, Address, Bytes, Env};
 
+#[contractimpl]
 impl YieldVault {
-    /// Note: `emergency_pause` and `emergency_unpause` have moved to emergency.rs.
-    /// They now support guardian authority, bounded durations, automatic expiry,
-    /// and governance oversight. Use `YieldVault::emergency_pause(env, caller, duration)`
-    /// and `YieldVault::emergency_unpause(env, caller)` instead.
-    /// Immediately pause all vault operations (deposit, withdraw, rebalance).
-    /// Callable only by admin.
-    pub fn emergency_pause(env: Env, admin: Address) -> Result<(), VaultError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &true);
-        // Use versioned event emission (#904)
-        events::emit_versioned_event(
-            &env,
-            symbol_short!("pause"),
-            events::ADMIN_ACTION_EVENT_V1.schema_version,
-            (admin,),
-        );
-        Ok(())
-    }
-
-    /// Resume vault operations after an emergency pause.
-    /// Callable only by admin.
-    pub fn emergency_unpause(env: Env, admin: Address) -> Result<(), VaultError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().remove(&DataKey::Paused);
-        // Use versioned event emission (#904)
-        events::emit_versioned_event(
-            &env,
-            symbol_short!("unpause"),
-            events::ADMIN_ACTION_EVENT_V1.schema_version,
-            (admin,),
-        );
-        Ok(())
-    }
-
     /// Rescue tokens sent to the contract by mistake.
     ///
     /// # Arguments
@@ -123,44 +90,10 @@ impl YieldVault {
 
         Err(VaultError::TimelockActive)
     }
-
-    /// View function to check if the vault is currently paused.
-    /// Delegates to emergency.rs implementation which handles automatic expiry
-    /// and guardian-based pause state.
-    pub fn is_paused(env: &Env) -> bool {
-        // Check legacy pause flag (DataKey::Paused) for backward compatibility
-        // and delegate to emergency.rs for the new timelocked pause system.
-        // The emergency module's is_paused handles automatic expiry.
-        let legacy_paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if legacy_paused {
-            return true;
-        }
-        // Check emergency module pause state (handles automatic expiry)
-        let pause_start: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseStart);
-        let pause_duration: Option<u64> = env.storage().instance().get(&crate::emergency::EmergencyKey::PauseDuration);
-        match (pause_start, pause_duration) {
-            (Some(start), Some(duration)) => {
-                let now = env.ledger().timestamp();
-                let elapsed = now.saturating_sub(start);
-                if elapsed >= duration {
-                    // Pause has expired - auto-cleanup
-                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseStart);
-                    env.storage().instance().remove(&crate::emergency::EmergencyKey::PauseDuration);
-                    false
-                } else {
-                    true
-                }
-            }
-            _ => false,
-        }
-    }
 }
 
-    // ── Replay Protection for Admin Operations (#902) ───────────────────
+// ── Replay Protection for Admin Operations (#902) ───────────────────
+impl YieldVault {
     /// Verify and consume an admin operation intent with domain separation.
     ///
     /// Domain includes:
@@ -200,7 +133,11 @@ impl YieldVault {
         let op_hash: Bytes = env.crypto().sha256(&preimage).into();
 
         // Check if already executed
-        if env.storage().instance().has(&DataKey::ExecutedAdminOp(op_hash.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ExecutedAdminOp(op_hash.clone()))
+        {
             return Err(VaultError::OperationReplayed);
         }
 
@@ -236,10 +173,8 @@ impl YieldVault {
             .instance()
             .set(&DataKey::AllowedContractRole(role.clone()), &contract);
 
-        env.events().publish(
-            (symbol_short!("allow"),),
-            (admin, role, contract),
-        );
+        env.events()
+            .publish((symbol_short!("allow"),), (admin, role, contract));
         Ok(())
     }
 
@@ -257,7 +192,10 @@ impl YieldVault {
         role: soroban_sdk::Symbol,
         caller: &Address,
     ) -> Result<(), VaultError> {
-        let allowed: Option<Address> = env.storage().instance().get(&DataKey::AllowedContractRole(role));
+        let allowed: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedContractRole(role));
 
         match allowed {
             Some(allowed_contract) if &allowed_contract == caller => Ok(()),
