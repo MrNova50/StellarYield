@@ -13,7 +13,8 @@ on:
       - assigned
       - unassigned
   schedule:
-    - cron: "*/10 * * * *"
+    # Every 30 minutes, scan every open PR targeting dev.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
