@@ -6,15 +6,6 @@ on:
       - dev
     types:
       - opened
-      - edited
-      - reopened
-      - synchronize
-      - ready_for_review
-      - assigned
-      - unassigned
-  schedule:
-    # Every 30 minutes, scan every open PR targeting dev.
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -34,6 +25,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Wait 10 minutes after pull request opens
+        if: ${{ github.event_name == 'pull_request_target' }}
+        run: sleep 600
+
       - name: Merge passing PRs and notify assignees
         uses: actions/github-script@v7
         with:
