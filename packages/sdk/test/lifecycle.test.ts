@@ -34,7 +34,7 @@ describe("Soroban SDK Bindings & Lifecycle", () => {
   const dummyPassphrase = Networks.TESTNET;
   const dummyRpcUrl = "https://soroban-testnet.stellar.org";
 
-  const sourceKeypair = Keypair.random();
+  const sourceKeypair = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 1));
   const sourceAccount = new Account(sourceKeypair.publicKey(), "100");
 
   function createUnsignedXdr(): string {
@@ -44,7 +44,7 @@ describe("Soroban SDK Bindings & Lifecycle", () => {
     })
       .addOperation(
         Operation.payment({
-          destination: Keypair.random().publicKey(),
+          destination: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 2)).publicKey(),
           asset: Asset.native(),
           amount: "10",
         })

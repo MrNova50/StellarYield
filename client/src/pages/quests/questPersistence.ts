@@ -38,10 +38,20 @@ export function mergeQuestsWithTemplate(
   const base = cloneQuests(template);
   if (!persisted?.length) return base;
 
-  const byId = new Map(persisted.map((q) => [q.id, q]));
+  const validPersisted = persisted.filter(
+    (q): q is Quest => Boolean(q && typeof q === "object" && "id" in q),
+  );
+  const byId = new Map(validPersisted.map((q) => [q.id, q]));
   return base.map((q) => {
     const saved = byId.get(q.id);
-    return saved ? structuredClone(saved) : q;
+    if (!saved) return q;
+    return {
+      ...q,
+      ...saved,
+      title: saved.title || q.title,
+      description: saved.description || q.description,
+      objectives: Array.isArray(saved.objectives) && saved.objectives.length > 0 ? saved.objectives : q.objectives,
+    };
   });
 }
 
@@ -127,24 +137,28 @@ export function loadWalletQuestBundle(
   template: Quest[],
   storage: StorageBackend = localStorage,
 ): PersistedWalletQuestBundle {
-  const key = walletQuestStorageKey(walletAddress);
-  const fromDisk = parseBundle(storage.getItem(key));
+  try {
+    const key = walletQuestStorageKey(walletAddress);
+    const fromDisk = parseBundle(storage.getItem(key));
 
-  if (fromDisk) {
-    return {
-      ...fromDisk,
-      quests: mergeQuestsWithTemplate(fromDisk.quests, template),
-    };
-  }
+    if (fromDisk) {
+      return {
+        ...fromDisk,
+        quests: mergeQuestsWithTemplate(fromDisk.quests, template),
+      };
+    }
 
-  const migrated = readLegacyBundle(storage);
-  if (migrated) {
-    return {
-      version: QUEST_STORAGE_VERSION,
-      quests: mergeQuestsWithTemplate(migrated.quests, template),
-      achievements: migrated.achievements,
-      lastSyncedAt: migrated.lastSyncedAt,
-    };
+    const migrated = readLegacyBundle(storage);
+    if (migrated) {
+      return {
+        version: QUEST_STORAGE_VERSION,
+        quests: mergeQuestsWithTemplate(migrated.quests, template),
+        achievements: migrated.achievements,
+        lastSyncedAt: migrated.lastSyncedAt,
+      };
+    }
+  } catch {
+    /* private browsing mode or storage blocked — return default template */
   }
 
   return {

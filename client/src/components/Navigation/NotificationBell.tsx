@@ -43,7 +43,7 @@ const NotificationBell: React.FC = () => {
       setBackendError(false);
     } catch (err) {
       console.error("Failed to fetch notifications", err);
-      setBackendError(backendStatus === "unavailable");
+      setBackendError(true);
     }
   };
 
@@ -59,7 +59,7 @@ const NotificationBell: React.FC = () => {
       setBackendError(false);
     } catch (err) {
       console.error("Failed to mark as read", err);
-      setBackendError(backendStatus === "unavailable");
+      setBackendError(true);
     }
   };
 
@@ -76,7 +76,7 @@ const NotificationBell: React.FC = () => {
       setBackendError(false);
     } catch (err) {
       console.error("Failed to clear notifications", err);
-      setBackendError(backendStatus === "unavailable");
+      setBackendError(true);
     }
   };
 

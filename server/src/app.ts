@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import cors from "cors";
 import express, { Request, Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -56,6 +57,7 @@ import momentumRouter from "./routes/momentum";
 import queueRouter from "./routes/queue";
 import vaultActivityRouter from "./routes/vaultActivity";
 import watchlistRouter from "./routes/watchlist";
+import driftRouter from "./routes/drift";
 
 import { createAuthChallenge, verifyAuthChallenge } from "./utils/stellarAuth";
 import {
@@ -164,6 +166,7 @@ export function createApp() {
   app.use("/api/queue", queueRouter);
   app.use("/api/vaults/activity", vaultActivityRouter);
   app.use("/api/watchlist", watchlistRouter);
+  app.use("/api/drift", driftRouter);
   app.use("/api/google-sheets", googleSheetsRouter);
   app.use("/api", googleSheetsRouter);
 
@@ -172,8 +175,7 @@ export function createApp() {
   // Prometheus scrape endpoint
   app.use("/metrics", prometheusMetricsRouter);
 
-  app.get("/api/events", async (req: Request, res: Response) => {
-    void req;
+  app.get("/api/events", async (_req: Request, res: Response) => {
     const prisma = await loadPrismaClient();
 
     if (!prisma) {
@@ -253,7 +255,7 @@ export function createApp() {
   });
 
   app.get("/api/recommend/timeline", (req: Request, res: Response) => {
-    const userId = String(req.query.userId || "anonymous");
+    const userId = typeof req.query.userId === "string" ? req.query.userId : "anonymous";
     res.json({
       userId,
       timeline: getRecommendationTimeline(userId),
@@ -299,7 +301,8 @@ export function createApp() {
     for (let index = 29; index >= 0; index -= 1) {
       const date = new Date(now);
       date.setDate(date.getDate() - index);
-      const noise = (Math.random() - 0.5) * baseApy * 0.2;
+      const randomFloat = randomBytes(4).readUInt32LE(0) / 0xffffffff;
+      const noise = (randomFloat - 0.5) * baseApy * 0.2;
       historical.push({
         date: date.toISOString().split("T")[0],
         apy: Math.round((baseApy + noise) * 100) / 100,
