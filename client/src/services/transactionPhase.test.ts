@@ -6,6 +6,9 @@ import {
   isStepCompleted,
   isStepActive,
   isTerminalPhase,
+  createDepositReceipt,
+  updateReceiptFromEvent,
+  markReceiptDuplicate,
 } from "./transactionPhase";
 
 describe("transactionPhase helpers", () => {
@@ -49,5 +52,60 @@ describe("transactionPhase helpers", () => {
     expect(isTerminalPhase("success")).toBe(true);
     expect(isTerminalPhase("failure")).toBe(true);
     expect(isTerminalPhase("polling")).toBe(false);
+  });
+});
+
+describe("deposit receipt tracking", () => {
+  it("creates a pending receipt", () => {
+    const receipt = createDepositReceipt("tx_abc", "vault-1", "USDC", 1000);
+    expect(receipt.status).toBe("pending");
+    expect(receipt.txHash).toBe("tx_abc");
+    expect(receipt.amount).toBe(1000);
+    expect(receipt.submittedAt).toBeTruthy();
+  });
+
+  it("confirms receipt when event amount matches", () => {
+    const receipt = createDepositReceipt("tx_abc", "vault-1", "USDC", 1000);
+    const updated = updateReceiptFromEvent(receipt, {
+      eventId: "evt_001",
+      amount: 1000,
+      sharesAssigned: 950,
+      processedAt: "2024-01-15T10:01:00Z",
+    });
+    expect(updated.status).toBe("confirmed");
+    expect(updated.indexedEventId).toBe("evt_001");
+    expect(updated.sharesAssigned).toBe(950);
+  });
+
+  it("marks receipt mismatched when amount differs", () => {
+    const receipt = createDepositReceipt("tx_abc", "vault-1", "USDC", 1000);
+    const updated = updateReceiptFromEvent(receipt, {
+      eventId: "evt_001",
+      amount: 999,
+      sharesAssigned: 949,
+      processedAt: "2024-01-15T10:01:00Z",
+    });
+    expect(updated.status).toBe("mismatched");
+    expect(updated.mismatchReason).toBe("amount_mismatch");
+  });
+
+  it("marks receipt as duplicate mismatched", () => {
+    const receipt = createDepositReceipt("tx_abc", "vault-1", "USDC", 1000);
+    const updated = markReceiptDuplicate(receipt, ["evt_001", "evt_002"]);
+    expect(updated.status).toBe("mismatched");
+    expect(updated.mismatchReason).toBe("duplicate_events");
+    expect(updated.indexedEventId).toBe("evt_001");
+  });
+
+  it("handles delayed confirmation correctly", () => {
+    const receipt = createDepositReceipt("tx_abc", "vault-1", "USDC", 1000);
+    const updated = updateReceiptFromEvent(receipt, {
+      eventId: "evt_001",
+      amount: 1000,
+      sharesAssigned: 950,
+      processedAt: "2024-01-15T10:05:00Z",
+    });
+    expect(updated.status).toBe("confirmed");
+    expect(updated.confirmedAt).toBe("2024-01-15T10:05:00Z");
   });
 });

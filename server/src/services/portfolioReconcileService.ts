@@ -417,3 +417,104 @@ export class PortfolioReconcileService {
 export function createPortfolioReconcileService(prisma: PrismaClient) {
   return new PortfolioReconcileService(prisma)
 }
+
+// ── Deposit Receipt Reconciliation ─────────────────────────────────────
+
+export type DepositReceiptStatus = 'pending' | 'confirmed' | 'mismatched';
+
+export interface DepositReceipt {
+  txHash: string;
+  walletAddress: string;
+  vaultId: string;
+  assetId: string;
+  amount: number;
+  submittedAt: string;
+  status: DepositReceiptStatus;
+  indexedEventId?: string;
+  confirmedAt?: string;
+  sharesAssigned?: number;
+  mismatchReason?: string;
+}
+
+export interface IndexedVaultDepositEvent {
+  eventId: string;
+  txHash: string;
+  vaultId: string;
+  assetId: string;
+  amount: number;
+  sharesAssigned: number;
+  ledgerSequence: number;
+  processedAt: string;
+}
+
+const receiptStore: DepositReceipt[] = [];
+
+export function resetReceiptStore(): void {
+  receiptStore.length = 0;
+}
+
+export function getReceiptStore(): readonly DepositReceipt[] {
+  return receiptStore;
+}
+
+export function submitDepositReceipt(receipt: DepositReceipt): void {
+  receiptStore.push(receipt);
+}
+
+export function reconcileReceipts(
+  receipts: DepositReceipt[],
+  events: IndexedVaultDepositEvent[],
+): DepositReceipt[] {
+  const eventsByTxHash = new Map<string, IndexedVaultDepositEvent[]>();
+  for (const event of events) {
+    const existing = eventsByTxHash.get(event.txHash) ?? [];
+    existing.push(event);
+    eventsByTxHash.set(event.txHash, existing);
+  }
+
+  return receipts.map((receipt) => {
+    const matchingEvents = eventsByTxHash.get(receipt.txHash);
+
+    if (!matchingEvents || matchingEvents.length === 0) {
+      return { ...receipt, status: 'pending' as DepositReceiptStatus };
+    }
+
+    if (matchingEvents.length > 1) {
+      return {
+        ...receipt,
+        status: 'mismatched' as DepositReceiptStatus,
+        mismatchReason: 'duplicate_events',
+        indexedEventId: matchingEvents[0].eventId,
+      };
+    }
+
+    const event = matchingEvents[0];
+    const amountMatches = Math.abs(event.amount - receipt.amount) < 0.0001;
+
+    if (!amountMatches) {
+      return {
+        ...receipt,
+        status: 'mismatched' as DepositReceiptStatus,
+        indexedEventId: event.eventId,
+        mismatchReason: 'amount_mismatch',
+        confirmedAt: event.processedAt,
+        sharesAssigned: event.sharesAssigned,
+      };
+    }
+
+    return {
+      ...receipt,
+      status: 'confirmed' as DepositReceiptStatus,
+      indexedEventId: event.eventId,
+      confirmedAt: event.processedAt,
+      sharesAssigned: event.sharesAssigned,
+    };
+  });
+}
+
+export function getReceiptsByStatus(
+  receipts: DepositReceipt[],
+  status: DepositReceiptStatus,
+): DepositReceipt[] {
+  return receipts.filter((r) => r.status === status);
+}
