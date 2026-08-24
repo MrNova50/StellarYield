@@ -2,7 +2,7 @@
 
 Thanks for contributing to StellarYield, a Stellar-native DeFi yield aggregator and automated vault system. We rely on the community to help build secure, efficient, and accessible DeFi tools.
 
-### Before You Start
+### Before You Start 
 
 * **Read the Docs:** Review the `README.md` for overall architecture context.
 * **Claim an Issue:** Browse the active issues, especially those tagged for the Stellar Wave, before starting work. Please ask to be assigned before opening a PR.
