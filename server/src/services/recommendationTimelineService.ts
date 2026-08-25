@@ -1,5 +1,13 @@
 import { assessConversionRisk } from "./conversionRiskService";
 import { ZapQuoteBody } from "./zapQuote";
+import {
+  PaginatedResponse,
+  PAGINATION_DEFAULT_LIMIT,
+  PAGINATION_MAX_LIMIT,
+  decodeTimelineCursor,
+  encodeTimelineCursor,
+  isBeforeTimelineCursor,
+} from "../types/pagination";
 
 export type ReasonCode =
   | "risk-tolerance-change"
@@ -228,6 +236,47 @@ export function getRecommendationTimeline(
   userId: string,
 ): RecommendationTimelineEntry[] {
   return historyStore.get(userId) ?? [];
+}
+
+/**
+ * Cursor-paginated view of a user's recommendation timeline (#1071).
+ *
+ * Entries are already stored newest-first; pagination uses a stable
+ * (timestamp, id) cursor rather than an array offset, so a page boundary
+ * stays correct even if new entries are recorded between requests — a new
+ * entry only ever lands *before* the cursor position (it's newer), never
+ * inside a page that's already been issued.
+ */
+export function getRecommendationTimelinePaginated(
+  userId: string,
+  options: { cursor?: string; limit?: number } = {},
+): PaginatedResponse<RecommendationTimelineEntry> {
+  const limit = Math.min(
+    Math.max(1, options.limit ?? PAGINATION_DEFAULT_LIMIT),
+    PAGINATION_MAX_LIMIT,
+  );
+
+  const all = historyStore.get(userId) ?? [];
+  const cursor = decodeTimelineCursor(options.cursor);
+
+  const eligible = cursor
+    ? all.filter((entry) =>
+        isBeforeTimelineCursor(
+          { ts: new Date(entry.timestamp).getTime(), id: entry.id },
+          cursor,
+        ),
+      )
+    : all;
+
+  const hasMore = eligible.length > limit;
+  const data = hasMore ? eligible.slice(0, limit) : eligible;
+  const last = data[data.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? encodeTimelineCursor({ ts: new Date(last.timestamp).getTime(), id: last.id })
+      : null;
+
+  return { data, pagination: { nextCursor, hasMore, limit } };
 }
 
 export function resetRecommendationTimelineStore(): void {
