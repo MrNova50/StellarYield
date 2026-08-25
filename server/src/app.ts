@@ -53,6 +53,16 @@ import reliabilityRouter from "./routes/reliability";
 import relayerStatusRouter from "./routes/relayerStatus";
 import riskRouter from "./routes/risk";
 import googleSheetsRouter from "./routes/googleSheets";
+import fragmentationRouter from "./routes/fragmentation";
+import indexerRouter from "./routes/indexer";
+import auditReplayRouter from "./routes/auditReplay";
+import momentumRouter from "./routes/momentum";
+import queueRouter from "./routes/queue";
+import vaultActivityRouter from "./routes/vaultActivity";
+import watchlistRouter from "./routes/watchlist";
+import portfolioMovementRouter from "./routes/portfolioMovement";
+import digestScheduleRouter from "./routes/digestScheduleSettings";
+import integrationsRouter from "./routes/integrations";
 
 import { createAuthChallenge, verifyAuthChallenge } from "./utils/stellarAuth";
 import {
@@ -158,6 +168,17 @@ export function createApp() {
   app.use("/api/reliability", reliabilityRouter);
   app.use("/api/relayer", relayerStatusRouter);
   app.use("/api/risk", riskRouter);
+  app.use("/api/liquidity", fragmentationRouter);
+  app.use("/api/indexer", indexerRouter);
+  app.use("/api/audit-replay", auditReplayRouter);
+  app.use("/api/momentum", momentumRouter);
+  app.use("/api/queue", queueRouter);
+  app.use("/api/vaults/activity", vaultActivityRouter);
+  app.use("/api/watchlist", watchlistRouter);
+  app.use("/api/portfolio", portfolioMovementRouter);
+  app.use("/api/digest/schedule", digestScheduleRouter);
+  app.use("/api/google-sheets", googleSheetsRouter);
+  app.use("/api/integrations", integrationsRouter);
   app.use("/api", googleSheetsRouter);
 
   // Legacy JSON metrics (internal tooling)

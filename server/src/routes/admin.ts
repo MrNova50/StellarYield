@@ -16,6 +16,8 @@ import {
 } from "../types/pagination";
 import { PROTOCOLS } from "../config/protocols";
 import { strategyStateTransitionAuditService } from "../services/strategyStateTransitionAuditService";
+import { rebalanceSagaService, SAGA_STATE } from "../services/rebalanceSagaService";
+import { recoverStuckSagas } from "../services/rebalanceSagaExecutor";
 
 const adminRouter = Router();
 
@@ -667,6 +669,21 @@ adminRouter.post(
           req.socket.remoteAddress ??
           "UNKNOWN",
         userAgent: req.headers["user-agent"] ?? "UNKNOWN",
+ * GET /api/admin/rebalance-sagas
+ * List rebalance sagas with optional filters.
+ */
+adminRouter.get(
+  "/rebalance-sagas",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { vaultId, state, limit, offset } = req.query;
+
+      const result = await rebalanceSagaService.listSagas({
+        vaultId: vaultId as string | undefined,
+        state: state as (typeof SAGA_STATE)[keyof typeof SAGA_STATE] | undefined,
+        limit: limit ? parseInt(limit as string) : 50,
+        offset: offset ? parseInt(offset as string) : 0,
       });
 
       res.json({
@@ -674,6 +691,77 @@ adminRouter.post(
         auditId: entry.id,
         timestamp: entry.timestamp,
       });
+        data: result.sagas,
+        total: result.total,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to list rebalance sagas",
+      });
+    }
+  },
+);
+
+/**
+ * GET /api/admin/rebalance-sagas/:sagaId
+ * Get detailed saga state with checkpoints and retry history.
+ */
+adminRouter.get(
+  "/rebalance-sagas/:sagaId",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { sagaId } = req.params;
+      const result = await rebalanceSagaService.getSagaWithHistory(sagaId);
+
+      if (!result) {
+        res.status(404).json({ error: `Saga ${sagaId} not found` });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to get saga details",
+      });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/rebalance-sagas/:sagaId/cancel
+ * Cancel a saga.
+ */
+adminRouter.post(
+  "/rebalance-sagas/:sagaId/cancel",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { sagaId } = req.params;
+      const { reason } = req.body as { reason?: string };
+
+      const saga = await rebalanceSagaService.cancelSaga(
+        sagaId,
+        reason ?? "Cancelled by admin",
+      );
+
+      setAuditContext(req, {
+        action: "CANCEL_REBALANCE_SAGA",
+        resource: "REBALANCE_SAGA",
+        resourceId: sagaId,
+        changes: { reason },
+      });
+
+      res.json({ success: true, data: saga });
     } catch (error) {
       res.status(500).json({
         error:
@@ -730,12 +818,83 @@ adminRouter.post(
           req.socket.remoteAddress ??
           "UNKNOWN",
         userAgent: req.headers["user-agent"] ?? "UNKNOWN",
+            : "Failed to cancel saga",
+      });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/rebalance-sagas/:sagaId/resolve-review
+ * Resolve a manual review (retry or cancel).
+ */
+adminRouter.post(
+  "/rebalance-sagas/:sagaId/resolve-review",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { sagaId } = req.params;
+      const { decision, reason } = req.body as {
+        decision?: "retry" | "cancel";
+        reason?: string;
+      };
+
+      if (!decision || !["retry", "cancel"].includes(decision)) {
+        res.status(400).json({ error: "decision must be 'retry' or 'cancel'" });
+        return;
+      }
+
+      const actor = (req as unknown as { user?: { id: string } }).user?.id || "admin";
+      const saga = await rebalanceSagaService.resolveManualReview(
+        sagaId,
+        decision,
+        actor,
+        reason,
+      );
+
+      setAuditContext(req, {
+        action: "RESOLVE_REBALANCE_SAGA_REVIEW",
+        resource: "REBALANCE_SAGA",
+        resourceId: sagaId,
+        changes: { decision, reason },
+      });
+
+      res.json({ success: true, data: saga });
+    } catch (error) {
+      res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to resolve saga review",
+      });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/rebalance-sagas/recover
+ * Recover stuck sagas (expired locks, interrupted executions).
+ */
+adminRouter.post(
+  "/rebalance-sagas/recover",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const workerId = `admin-${Date.now()}`;
+      const result = await recoverStuckSagas(workerId);
+
+      setAuditContext(req, {
+        action: "RECOVER_REBALANCE_SAGAS",
+        resource: "REBALANCE_SAGA",
+        changes: { recovered: result.recovered },
       });
 
       res.json({
         success: true,
         auditId: entry.id,
         timestamp: entry.timestamp,
+        recovered: result.recovered,
+        sagas: result.sagas,
       });
     } catch (error) {
       res.status(500).json({
@@ -743,6 +902,7 @@ adminRouter.post(
           error instanceof Error
             ? error.message
             : "Failed to record cancelled action.",
+            : "Failed to recover stuck sagas",
       });
     }
   },

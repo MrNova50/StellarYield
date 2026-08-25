@@ -63,6 +63,7 @@ import ConnectWalletButton from "./components/wallet/ConnectWalletButton";
 import NotificationBell from "./components/Navigation/NotificationBell";
 import OnRampModal from "./features/onramp/OnRampModal";
 import { useWallet } from "./context/useWallet";
+import { NotificationProvider } from "./context/NotificationContext";
 import RouteBoundary from "./components/common/RouteBoundary";
 import RequireOnboarding from "./components/common/RequireOnboarding";
 import {
@@ -287,7 +288,7 @@ const router = createBrowserRouter([
       {
         path: "/apy",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="analytics">
             <ApyDashboard />
           </RouteBoundary>
         ),
@@ -377,6 +378,8 @@ const router = createBrowserRouter([
             <RequireOnboarding require="wallet">
               <GovernanceDashboard />
             </RequireOnboarding>
+          <RouteBoundary routeName="governance">
+            <GovernanceDashboard />
           </RouteBoundary>
         ),
       },
@@ -451,7 +454,7 @@ const router = createBrowserRouter([
       {
         path: "/transparency",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="transparency">
             <TransparencyDashboard />
           </RouteBoundary>
         ),
@@ -459,7 +462,7 @@ const router = createBrowserRouter([
       {
         path: "/transparency/incidents",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="transparency">
             <RiskChronology />
           </RouteBoundary>
         ),
@@ -467,7 +470,7 @@ const router = createBrowserRouter([
       {
         path: "/transparency/relayer",
         element: (
-          <RouteBoundary>
+          <RouteBoundary routeName="transparency">
             <RelayerStatusPage />
           </RouteBoundary>
         ),
@@ -505,6 +508,8 @@ const router = createBrowserRouter([
             <RequireOnboarding require="wallet">
               <TreasurySimulation />
             </RequireOnboarding>
+          <RouteBoundary routeName="treasury">
+            <TreasurySimulation />
           </RouteBoundary>
         ),
       },
@@ -513,7 +518,11 @@ const router = createBrowserRouter([
 ]);
 
 function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <NotificationProvider>
+      <RouterProvider router={router} />
+    </NotificationProvider>
+  );
 }
 
 export default App;

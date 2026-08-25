@@ -4,6 +4,12 @@ import {
   type RawHolding,
   type MergedHolding,
 } from "./assetIdentityService";
+  analyzeConcentration,
+  buildExposureBuckets,
+  type ConcentrationAnalysis,
+  type ConcentrationThresholdsInput,
+} from '../../../shared/types/exposureConcentration';
+import { readConcentrationThresholdOverrides } from '../config/concentrationThresholds';
 
 export type Position = { asset: string; expected: number };
 export type ProviderBalance = {
@@ -184,6 +190,23 @@ export interface ReconciliationResult {
   staleDurationMs?: number;
   orphanedTransactions?: string[];
   duplicatePositions?: string[];
+  status: 'success' | 'partial' | 'failed'
+  changes: PositionChange[]
+  mismatches: ReconciliationMismatch[]
+  timestamp: Date
+  sourceOfTruth: 'chain' | 'backend_snapshot'
+  projectionVersion?: number
+  projectionCheckpoint?: number
+  isStale: boolean
+  staleDurationMs?: number
+  orphanedTransactions?: string[]
+  duplicatePositions?: string[]
+  /**
+   * Asset and protocol concentration of the reconciled (chain-authoritative)
+   * positions, so callers see exposure risk against the same snapshot they just
+   * reconciled rather than a separately-fetched one.
+   */
+  concentration: ConcentrationAnalysis
 }
 
 export interface PositionChange {
@@ -212,8 +235,31 @@ interface PrismaClient {
   vaultBalance: PrismaVaultBalance;
 }
 
+/**
+ * Grades asset and protocol concentration for a set of positions.
+ *
+ * Position `amount` is used as the exposure weight; the reconciler works in
+ * position units and does not carry USD prices, so shares are relative to the
+ * reconciled total rather than to a priced portfolio value.
+ */
+export function analyzePositionConcentration(
+  positions: PortfolioPosition[],
+  thresholds?: ConcentrationThresholdsInput,
+): ConcentrationAnalysis {
+  const buckets = buildExposureBuckets(positions, (p) => ({
+    asset: p.assetId,
+    protocol: p.protocol,
+    valueUsd: p.amount,
+  }))
+
+  return analyzeConcentration(buckets, thresholds ?? readConcentrationThresholdOverrides())
+}
+
 export class PortfolioReconcileService {
-  constructor(private prisma: PrismaClient) {}
+  constructor(
+    private prisma: PrismaClient,
+    private concentrationThresholds?: ConcentrationThresholdsInput,
+  ) {}
 
   async reconcilePortfolio(
     walletAddress: string,
@@ -298,6 +344,10 @@ export class PortfolioReconcileService {
         duplicatePositions:
           duplicatePositions.length > 0 ? duplicatePositions : undefined,
       };
+        orphanedTransactions: orphanedTransactions.length > 0 ? orphanedTransactions : undefined,
+        duplicatePositions: duplicatePositions.length > 0 ? duplicatePositions : undefined,
+        concentration: this.analyzeConcentration(chainPositions),
+      }
     } catch (error) {
       await this.logReconciliationEvent(walletAddress, [], [], "failed", error);
       return {
@@ -308,7 +358,14 @@ export class PortfolioReconcileService {
         sourceOfTruth: "chain",
         isStale: true,
       };
+        concentration: this.analyzeConcentration([]),
+      }
     }
+  }
+
+  /** Grades concentration using this service's configured thresholds. */
+  analyzeConcentration(positions: PortfolioPosition[]): ConcentrationAnalysis {
+    return analyzePositionConcentration(positions, this.concentrationThresholds)
   }
 
   private comparePositions(
@@ -489,6 +546,8 @@ export class PortfolioReconcileService {
       entry.metadata = metadata;
     }
     persistReconciliationEvent(entry);
+    console.log(`[Reconciliation] ${status} for ${walletAddress}`)
+    persistReconciliationEvent(entry)
   }
 
   async getReconciliationHistory(
@@ -501,4 +560,110 @@ export class PortfolioReconcileService {
 
 export function createPortfolioReconcileService(prisma: PrismaClient) {
   return new PortfolioReconcileService(prisma);
+export function createPortfolioReconcileService(
+  prisma: PrismaClient,
+  concentrationThresholds?: ConcentrationThresholdsInput,
+) {
+  return new PortfolioReconcileService(prisma, concentrationThresholds)
+}
+
+// ── Deposit Receipt Reconciliation ─────────────────────────────────────
+
+export type DepositReceiptStatus = 'pending' | 'confirmed' | 'mismatched';
+
+export interface DepositReceipt {
+  txHash: string;
+  walletAddress: string;
+  vaultId: string;
+  assetId: string;
+  amount: number;
+  submittedAt: string;
+  status: DepositReceiptStatus;
+  indexedEventId?: string;
+  confirmedAt?: string;
+  sharesAssigned?: number;
+  mismatchReason?: string;
+}
+
+export interface IndexedVaultDepositEvent {
+  eventId: string;
+  txHash: string;
+  vaultId: string;
+  assetId: string;
+  amount: number;
+  sharesAssigned: number;
+  ledgerSequence: number;
+  processedAt: string;
+}
+
+const receiptStore: DepositReceipt[] = [];
+
+export function resetReceiptStore(): void {
+  receiptStore.length = 0;
+}
+
+export function getReceiptStore(): readonly DepositReceipt[] {
+  return receiptStore;
+}
+
+export function submitDepositReceipt(receipt: DepositReceipt): void {
+  receiptStore.push(receipt);
+}
+
+export function reconcileReceipts(
+  receipts: DepositReceipt[],
+  events: IndexedVaultDepositEvent[],
+): DepositReceipt[] {
+  const eventsByTxHash = new Map<string, IndexedVaultDepositEvent[]>();
+  for (const event of events) {
+    const existing = eventsByTxHash.get(event.txHash) ?? [];
+    existing.push(event);
+    eventsByTxHash.set(event.txHash, existing);
+  }
+
+  return receipts.map((receipt) => {
+    const matchingEvents = eventsByTxHash.get(receipt.txHash);
+
+    if (!matchingEvents || matchingEvents.length === 0) {
+      return { ...receipt, status: 'pending' as DepositReceiptStatus };
+    }
+
+    if (matchingEvents.length > 1) {
+      return {
+        ...receipt,
+        status: 'mismatched' as DepositReceiptStatus,
+        mismatchReason: 'duplicate_events',
+        indexedEventId: matchingEvents[0].eventId,
+      };
+    }
+
+    const event = matchingEvents[0];
+    const amountMatches = Math.abs(event.amount - receipt.amount) < 0.0001;
+
+    if (!amountMatches) {
+      return {
+        ...receipt,
+        status: 'mismatched' as DepositReceiptStatus,
+        indexedEventId: event.eventId,
+        mismatchReason: 'amount_mismatch',
+        confirmedAt: event.processedAt,
+        sharesAssigned: event.sharesAssigned,
+      };
+    }
+
+    return {
+      ...receipt,
+      status: 'confirmed' as DepositReceiptStatus,
+      indexedEventId: event.eventId,
+      confirmedAt: event.processedAt,
+      sharesAssigned: event.sharesAssigned,
+    };
+  });
+}
+
+export function getReceiptsByStatus(
+  receipts: DepositReceipt[],
+  status: DepositReceiptStatus,
+): DepositReceipt[] {
+  return receipts.filter((r) => r.status === status);
 }
