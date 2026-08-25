@@ -9,6 +9,13 @@ import {
   FileText,
   ExternalLink,
 } from "lucide-react";
+import {
+  RECONCILE_CAUSES,
+  isMissingDataCause,
+  isSymbolDriftCause,
+  type ReconcileCauseCategory,
+  type ReconcileCauseCode,
+} from "../../../../shared/types/reconcileCause";
 import "./PortfolioReconcile.css";
 
 export type ReconcileAnomalyType = "missing" | "duplicate" | "stale" | "orphaned" | "matched";
@@ -42,6 +49,13 @@ export interface ReconcileRow {
   anomalyType: ReconcileAnomalyType;
   status: ReconcileStatus;
   evidence?: ReconcileEvidence;
+  /**
+   * Why this row did not reconcile, from the server's cause taxonomy. Rows
+   * predating cause codes simply omit it and render as before.
+   */
+  causeCode?: ReconcileCauseCode;
+  /** The specific occurrence, e.g. "USDC is carried on-chain as USDC.e". */
+  causeDetail?: string;
 }
 
 export interface ReconcileGroup {
@@ -110,6 +124,38 @@ const DepositReceiptTable: React.FC<{ receipts: DepositReceiptRow[] }> = ({ rece
   </>
 );
 
+/**
+ * Renders the cause of a row.
+ *
+ * The category drives the styling as well as the label, because the whole point
+ * of the taxonomy is that an operator can tell missing data from symbol drift
+ * at a glance: a holding the projection never saw needs a replay, a holding
+ * that merely changed asset code needs an alias, and treating one as the other
+ * wastes the response.
+ */
+const CAUSE_CATEGORY_CLASS: Record<ReconcileCauseCategory, string> = {
+  "missing-data": "cause-missing-data",
+  "symbol-drift": "cause-symbol-drift",
+  "stale-source": "cause-stale-source",
+  amount: "cause-amount",
+  integrity: "cause-integrity",
+};
+
+const CauseBadge: React.FC<{ code: ReconcileCauseCode; detail?: string }> = ({ code, detail }) => {
+  const descriptor = RECONCILE_CAUSES[code];
+  return (
+    <span
+      className={`cause-badge ${CAUSE_CATEGORY_CLASS[descriptor.category]}`}
+      data-cause={code}
+      data-cause-category={descriptor.category}
+      title={`${descriptor.summary}\n\nFix: ${descriptor.remediation}`}
+    >
+      {descriptor.title}
+      {detail && <span className="cause-detail">{detail}</span>}
+    </span>
+  );
+};
+
 function groupByVault(rows: ReconcileRow[]): ReconcileGroup[] {
   const map = new Map<string, ReconcileRow[]>();
   for (const row of rows) {
@@ -141,6 +187,7 @@ function copyEvidence(row: ReconcileRow): string {
     `Asset: ${row.asset}`,
     `Vault: ${row.vault}`,
     `Anomaly: ${row.anomalyType}`,
+    `Cause: ${row.causeCode ? RECONCILE_CAUSES[row.causeCode].title : "N/A"}`,
     `Severity: ${row.severity}`,
     `Status: ${row.status}`,
     `Expected: ${row.expected}`,
@@ -152,6 +199,10 @@ function copyEvidence(row: ReconcileRow): string {
   if (evidence.anomalyId) lines.push(`Anomaly ID: ${evidence.anomalyId}`);
   if (evidence.projectionVersion) lines.push(`Projection: ${evidence.projectionVersion}`);
   if (evidence.sourceEventId) lines.push(`Source Event: ${evidence.sourceEventId}`);
+  if (row.causeCode) {
+    lines.push(`Detail: ${row.causeDetail ?? RECONCILE_CAUSES[row.causeCode].summary}`);
+    lines.push(`Remediation: ${RECONCILE_CAUSES[row.causeCode].remediation}`);
+  }
   return lines.join("\n");
 }
 
@@ -173,6 +224,7 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showStaleOnly, setShowStaleOnly] = useState(false);
+  const [causeFilter, setCauseFilter] = useState<string>("all");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -181,9 +233,20 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
       if (severityFilter !== "all" && row.severity !== severityFilter) return false;
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
       if (showStaleOnly && !row.evidence?.isStaleCheckpoint) return false;
+      if (causeFilter === "missing-data" && !(row.causeCode && isMissingDataCause(row.causeCode)))
+        return false;
+      if (causeFilter === "symbol-drift" && !(row.causeCode && isSymbolDriftCause(row.causeCode)))
+        return false;
+      if (
+        causeFilter !== "all" &&
+        causeFilter !== "missing-data" &&
+        causeFilter !== "symbol-drift" &&
+        (!row.causeCode || RECONCILE_CAUSES[row.causeCode].category !== causeFilter)
+      )
+        return false;
       return true;
     });
-  }, [rows, severityFilter, statusFilter, showStaleOnly]);
+  }, [rows, severityFilter, statusFilter, showStaleOnly, causeFilter]);
 
   const groups = useMemo(() => groupByVault(filteredRows), [filteredRows]);
 
@@ -260,6 +323,21 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
             <option value="unverified">Unverified</option>
           </select>
         </div>
+        <div className="filter-group">
+          <select
+            value={causeFilter}
+            onChange={(e) => setCauseFilter(e.target.value)}
+            className="filter-select"
+            aria-label="Filter by cause"
+          >
+            <option value="all">All Causes</option>
+            <option value="missing-data">Missing data</option>
+            <option value="symbol-drift">Symbol drift</option>
+            <option value="stale-source">Stale source</option>
+            <option value="amount">Amount drift</option>
+            <option value="integrity">Integrity</option>
+          </select>
+        </div>
         <label className="filter-checkbox">
           <input
             type="checkbox"
@@ -310,6 +388,7 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
                   <th>Delta</th>
                   <th>Severity</th>
                   <th>Anomaly</th>
+                  <th>Cause</th>
                   <th>Status</th>
                   <th>Evidence</th>
                 </tr>
@@ -325,6 +404,13 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
                       <td>{r.delta === null ? "—" : r.delta}</td>
                       <td>{SEVERITY_LABELS[r.severity] ?? r.severity}</td>
                       <td>{ANOMALY_LABELS[r.anomalyType]}</td>
+                      <td>
+                        {r.causeCode ? (
+                          <CauseBadge code={r.causeCode} detail={r.causeDetail} />
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td>{r.status}</td>
                       <td>
                         {r.evidence && (
