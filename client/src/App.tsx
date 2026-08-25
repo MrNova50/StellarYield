@@ -80,10 +80,14 @@ import {
   X,
   Settings,
   Bell,
+  Activity,
 } from "lucide-react";
 import "./index.css";
 import SettingsModal from "./features/settings/SettingsModal";
 import AlertsModal from "./features/alerts/AlertsModal";
+import { DiagnosticsModal, DiagnosticsTrigger } from "./components/diagnostics";
+import { listenToOpenDiagnostics } from "./lib/config";
+import { useEffect } from "react";
 
 // Vault IDs available for APY alerts (matches protocol names from yieldService)
 const VAULT_OPTIONS = ["Blend", "Soroswap", "DeFindex"];
@@ -112,9 +116,14 @@ const RootLayout = () => {
   const [isOnRampOpen, setIsOnRampOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const location = useLocation();
   const isHomePage = location.pathname === "/";
+
+  useEffect(() => {
+    return listenToOpenDiagnostics(() => setIsDiagnosticsOpen(true));
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -127,6 +136,11 @@ const RootLayout = () => {
         />
       )}
       {/* Settings Modal */}
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      {/* Diagnostics Modal */}
+      <DiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -195,6 +209,7 @@ const RootLayout = () => {
                 <Bell size={16} />
               </button>
             )}
+            <DiagnosticsTrigger onClick={() => setIsDiagnosticsOpen(true)} />
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
@@ -260,6 +275,19 @@ const RootLayout = () => {
             </div>
 
             {/* Primary routes */}
+            <Link to="/" className="drawer-link"><Landmark size={16} /> Yield Vaults</Link>
+            <Link to="/" className="drawer-link"><Zap size={16} /> Strategies</Link>
+            <Link to="/" className="drawer-link"><BarChart3 size={16} /> APY Compare</Link>
+            <button
+              type="button"
+              onClick={() => {
+                setIsDrawerOpen(false);
+                setIsDiagnosticsOpen(true);
+              }}
+              className="drawer-link flex items-center gap-2 text-left w-full mt-2 pt-2 border-t border-slate-700/50"
+            >
+              <Activity size={16} /> System Diagnostics
+            </button>
             <Link to="/" className="drawer-link">
               <Landmark size={16} /> Yield Vaults
             </Link>
