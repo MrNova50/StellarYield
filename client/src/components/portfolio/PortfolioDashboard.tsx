@@ -15,6 +15,8 @@ import PresetsPanel from "../../features/presets/PresetsPanel";
 import UnifiedActivityTimeline from "./UnifiedActivityTimeline";
 import PortfolioExport from "./PortfolioExport";
 import RiskScoreBreakdownPanel from "./RiskScoreBreakdownPanel";
+import FreshnessBadge from "./FreshnessBadge";
+import { computeHoldingFreshness } from "./holdingFreshness";
 import {
   analyzeConcentration,
   buildExposureBuckets,
@@ -30,6 +32,8 @@ interface VaultPosition {
   currentValue: number;
   apy: number;
   shares: number;
+  /** ISO-8601 timestamp of when this position's source data was last fetched (#1107). */
+  fetchedAt?: string | null;
 }
 
 interface Transaction {
@@ -44,9 +48,33 @@ interface Transaction {
 // ── Mock data (will be replaced with on-chain reads in future) ──────────
 
 const MOCK_POSITIONS: VaultPosition[] = [
-  { protocol: "Blend", asset: "USDC", deposited: 5000, currentValue: 5162.5, apy: 6.5, shares: 5000 },
-  { protocol: "Soroswap", asset: "XLM-USDC", deposited: 2000, currentValue: 2122, apy: 12.2, shares: 1850 },
-  { protocol: "DeFindex", asset: "Yield Index", deposited: 3000, currentValue: 3133.5, apy: 8.9, shares: 2900 },
+  {
+    protocol: "Blend",
+    asset: "USDC",
+    deposited: 5000,
+    currentValue: 5162.5,
+    apy: 6.5,
+    shares: 5000,
+    fetchedAt: new Date(Date.now() - 60_000).toISOString(), // fresh (1 min ago)
+  },
+  {
+    protocol: "Soroswap",
+    asset: "XLM-USDC",
+    deposited: 2000,
+    currentValue: 2122,
+    apy: 12.2,
+    shares: 1850,
+    fetchedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // stale (1 hour ago)
+  },
+  {
+    protocol: "DeFindex",
+    asset: "Yield Index",
+    deposited: 3000,
+    currentValue: 3133.5,
+    apy: 8.9,
+    shares: 2900,
+    fetchedAt: null, // unknown — source has never reported a fetch timestamp
+  },
 ];
 
 const MOCK_TRANSACTIONS: Transaction[] = [
@@ -271,11 +299,13 @@ export default function PortfolioDashboard({ walletAddress }: PortfolioDashboard
                 <th className="pb-3 text-right font-semibold">Current Value</th>
                 <th className="pb-3 text-right font-semibold">APY</th>
                 <th className="pb-3 text-right font-semibold">P&L</th>
+                <th className="pb-3 text-right font-semibold">Source</th>
               </tr>
             </thead>
             <tbody>
               {positions.map((pos, i) => {
                 const pnl = pos.currentValue - pos.deposited;
+                const freshness = computeHoldingFreshness(pos.fetchedAt);
                 return (
                   <tr
                     key={i}
@@ -288,6 +318,9 @@ export default function PortfolioDashboard({ walletAddress }: PortfolioDashboard
                     <td className="py-4 text-right text-[#3EAC75]">{pos.apy}%</td>
                     <td className={`py-4 text-right font-medium ${pnl >= 0 ? "text-[#3EAC75]" : "text-[#FF5E5E]"}`}>
                       {pnl >= 0 ? "+" : ""}{formatCurrency(pnl)}
+                    </td>
+                    <td className="py-4 text-right">
+                      <FreshnessBadge status={freshness.status} ageSeconds={freshness.ageSeconds} />
                     </td>
                   </tr>
                 );
