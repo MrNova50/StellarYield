@@ -10,7 +10,9 @@ import Dashboard from "./components/Dashboard";
 import Vault from "./components/Vault";
 const ApyDashboard = lazy(() => import("./components/dashboard/ApyDashboard"));
 const AIAdvisor = lazy(() => import("./components/AIAdvisor"));
-const PortfolioPage = lazy(() => import("./components/portfolio/PortfolioPage"));
+const PortfolioPage = lazy(
+  () => import("./components/portfolio/PortfolioPage"),
+);
 const GovernanceDashboard = lazy(
   () => import("./pages/governance/GovernanceDashboard"),
 );
@@ -19,22 +21,44 @@ const Leaderboard = lazy(() => import("./pages/leaderboard/Leaderboard"));
 const ClaimRewards = lazy(() => import("./features/rewards/ClaimRewards"));
 const PnLChart = lazy(() => import("./features/pnl/PnLChart"));
 const TaxExport = lazy(() => import("./features/taxes/TaxExport"));
-const ReferralDashboard = lazy(() => import("./features/referrals/ReferralDashboard"));
+const ReferralDashboard = lazy(
+  () => import("./features/referrals/ReferralDashboard"),
+);
 const VestingDashboard = lazy(() => import("./pages/vesting/VestingDashboard"));
 const TransparencyDashboard = lazy(
   () => import("./pages/transparency/TransparencyDashboard"),
 );
-const RiskChronology = lazy(() => import("./pages/transparency/RiskChronology"));
-const RelayerStatusPage = lazy(() => import("./pages/transparency/RelayerStatusPage"));
+const RiskChronology = lazy(
+  () => import("./pages/transparency/RiskChronology"),
+);
+const RelayerStatusPage = lazy(
+  () => import("./pages/transparency/RelayerStatusPage"),
+);
 const StressTestDashboard = lazy(() => import("./pages/StressTestDashboard"));
 const YieldForGood = lazy(() => import("./features/donations/YieldForGood"));
-const YieldCalculator = lazy(() => import("./components/calculator/YieldCalculator"));
-const StrategyComparison = lazy(() => import("./pages/strategy/StrategyComparison"));
-const StrategyLeaderboard = lazy(() => import("./pages/leaderboard/StrategyLeaderboard"));
-const TreasurySimulation = lazy(() => import("./pages/treasury/TreasurySimulation"));
+const YieldCalculator = lazy(
+  () => import("./components/calculator/YieldCalculator"),
+);
+const StrategyComparison = lazy(
+  () => import("./pages/strategy/StrategyComparison"),
+);
+const StablecoinBasketRebalance = lazy(
+  () => import("./pages/strategy/StablecoinBasketRebalance"),
+);
+const DeltaNeutralUnwind = lazy(
+  () => import("./pages/strategy/DeltaNeutralUnwind"),
+);
+const StrategyLeaderboard = lazy(
+  () => import("./pages/leaderboard/StrategyLeaderboard"),
+);
+const TreasurySimulation = lazy(
+  () => import("./pages/treasury/TreasurySimulation"),
+);
 const WalletSessionReview = lazy(() => import("./auth/WalletSessionReview"));
 const FragmentationDashboard = lazy(() =>
-  import("./features/fragmentation").then((m) => ({ default: m.FragmentationDashboard })),
+  import("./features/fragmentation").then((m) => ({
+    default: m.FragmentationDashboard,
+  })),
 );
 const ReallocationTimelinePlanner = lazy(() =>
   import("./portfolio/ReallocationTimelinePlanner").then((m) => ({
@@ -45,6 +69,7 @@ import ConnectWalletButton from "./components/wallet/ConnectWalletButton";
 import NotificationBell from "./components/Navigation/NotificationBell";
 import OnRampModal from "./features/onramp/OnRampModal";
 import { useWallet } from "./context/useWallet";
+import { NotificationProvider } from "./context/NotificationContext";
 import RouteBoundary from "./components/common/RouteBoundary";
 import {
   Landmark,
@@ -101,7 +126,10 @@ const RootLayout = () => {
         />
       )}
       {/* Settings Modal */}
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
       {/* APY Alerts Modal */}
       {isConnected && walletAddress && (
         <AlertsModal
@@ -115,8 +143,16 @@ const RootLayout = () => {
       {!isHomePage && (
         <nav className="app-nav glass-panel mx-3 mt-4 px-4 py-3.5 flex justify-between items-center mb-6 sticky top-3 z-50 shadow-2xl">
           <div className="flex items-center gap-2 shrink-0">
-            <svg viewBox="0 0 256 256" fill="none" className="w-8 h-8 flex-shrink-0" xmlns="http://www.w3.org/2000/svg">
-              <path d="M 0 256 L 0 128 L 128 128 Z M 128 256 L 128 128 L 256 128 Z M 0 128 L 0 0 L 128 0 Z M 128 128 L 128 0 L 256 0 Z" fill="rgb(84, 84, 84)"></path>
+            <svg
+              viewBox="0 0 256 256"
+              fill="none"
+              className="w-8 h-8 flex-shrink-0"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M 0 256 L 0 128 L 128 128 Z M 128 256 L 128 128 L 256 128 Z M 0 128 L 0 0 L 128 0 Z M 128 128 L 128 0 L 256 0 Z"
+                fill="rgb(84, 84, 84)"
+              ></path>
             </svg>
             <h1 className="text-base font-bold tracking-wide text-slate-900">
               Stellar Yield
@@ -125,13 +161,22 @@ const RootLayout = () => {
 
           <div className="hidden md:flex flex-1 min-w-0 nav-links">
             <div className="flex gap-4 xl:gap-5 items-center text-[0.82rem] font-semibold text-slate-600 px-4">
-              <Link to="/" className="hover:text-slate-900 transition-colors flex items-center gap-1.5">
+              <Link
+                to="/"
+                className="hover:text-slate-900 transition-colors flex items-center gap-1.5"
+              >
                 <Landmark size={15} /> Yield Vaults
               </Link>
-              <Link to="/" className="hover:text-slate-900 transition-colors flex items-center gap-1.5">
+              <Link
+                to="/"
+                className="hover:text-slate-900 transition-colors flex items-center gap-1.5"
+              >
                 <Zap size={15} /> Strategies
               </Link>
-              <Link to="/" className="hover:text-slate-900 transition-colors flex items-center gap-1.5">
+              <Link
+                to="/"
+                className="hover:text-slate-900 transition-colors flex items-center gap-1.5"
+              >
                 <BarChart3 size={15} /> APY Compare
               </Link>
             </div>
@@ -162,7 +207,9 @@ const RootLayout = () => {
             <button
               type="button"
               onClick={() => setIsDrawerOpen((v) => !v)}
-              aria-label={isDrawerOpen ? "Close navigation menu" : "Open navigation menu"}
+              aria-label={
+                isDrawerOpen ? "Close navigation menu" : "Open navigation menu"
+              }
               aria-expanded={isDrawerOpen}
               aria-controls="mobile-nav-drawer"
               className="md:hidden p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors"
@@ -198,7 +245,9 @@ const RootLayout = () => {
             }}
           >
             <div className="flex items-center justify-between mb-4">
-              <span className="text-sm font-semibold text-gray-400 uppercase tracking-widest">Menu</span>
+              <span className="text-sm font-semibold text-gray-400 uppercase tracking-widest">
+                Menu
+              </span>
               <button
                 type="button"
                 onClick={() => setIsDrawerOpen(false)}
@@ -210,9 +259,15 @@ const RootLayout = () => {
             </div>
 
             {/* Primary routes */}
-            <Link to="/" className="drawer-link"><Landmark size={16} /> Yield Vaults</Link>
-            <Link to="/" className="drawer-link"><Zap size={16} /> Strategies</Link>
-            <Link to="/" className="drawer-link"><BarChart3 size={16} /> APY Compare</Link>
+            <Link to="/" className="drawer-link">
+              <Landmark size={16} /> Yield Vaults
+            </Link>
+            <Link to="/" className="drawer-link">
+              <Zap size={16} /> Strategies
+            </Link>
+            <Link to="/" className="drawer-link">
+              <BarChart3 size={16} /> APY Compare
+            </Link>
           </nav>
         </div>
       )}
@@ -272,6 +327,22 @@ const router = createBrowserRouter([
         element: (
           <RouteBoundary>
             <StrategyComparison />
+          </RouteBoundary>
+        ),
+      },
+      {
+        path: "/strategy/stablecoin-basket",
+        element: (
+          <RouteBoundary>
+            <StablecoinBasketRebalance />
+          </RouteBoundary>
+        ),
+      },
+      {
+        path: "/strategy/delta-neutral",
+        element: (
+          <RouteBoundary>
+            <DeltaNeutralUnwind />
           </RouteBoundary>
         ),
       },
@@ -431,9 +502,12 @@ const router = createBrowserRouter([
   },
 ]);
 
-
 function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <NotificationProvider>
+      <RouterProvider router={router} />
+    </NotificationProvider>
+  );
 }
 
 export default App;

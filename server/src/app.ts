@@ -13,7 +13,10 @@ import { authMiddleware } from "./middleware/auth";
 import { sendError } from "./utils/errorResponse";
 import { requestContextMiddleware } from "./middleware/requestContext";
 import { correlationIdMiddleware } from "./middleware/correlationId";
-import { errorHandler, requestLoggerMiddleware } from "./middleware/requestLogger";
+import {
+  errorHandler,
+  requestLoggerMiddleware,
+} from "./middleware/requestLogger";
 import yieldsRouter from "./routes/yields";
 import leaderboardRouter from "./routes/leaderboard";
 import notificationsRouter from "./routes/notifications";
@@ -58,6 +61,11 @@ import queueRouter from "./routes/queue";
 import vaultActivityRouter from "./routes/vaultActivity";
 import watchlistRouter from "./routes/watchlist";
 import driftRouter from "./routes/drift";
+import portfolioMovementRouter from "./routes/portfolioMovement";
+import digestScheduleRouter from "./routes/digestScheduleSettings";
+import integrationsRouter from "./routes/integrations";
+import stablecoinBasketRouter from "./routes/stablecoinBasket";
+import deltaNeutralRouter from "./routes/deltaNeutral";
 
 import { createAuthChallenge, verifyAuthChallenge } from "./utils/stellarAuth";
 import {
@@ -69,7 +77,10 @@ import {
   type DepositWizardInput,
   type UserRiskProfile,
 } from "./services/depositRecommendationService";
-import { runStressScenario, StressScenarioType } from "./services/stressScenarioService";
+import {
+  runStressScenario,
+  StressScenarioType,
+} from "./services/stressScenarioService";
 
 type EventsPrismaClient = {
   event: {
@@ -167,7 +178,12 @@ export function createApp() {
   app.use("/api/vaults/activity", vaultActivityRouter);
   app.use("/api/watchlist", watchlistRouter);
   app.use("/api/drift", driftRouter);
+  app.use("/api/portfolio", portfolioMovementRouter);
+  app.use("/api/digest/schedule", digestScheduleRouter);
+  app.use("/api/strategies/stablecoin-basket", stablecoinBasketRouter);
+  app.use("/api/strategies/delta-neutral", deltaNeutralRouter);
   app.use("/api/google-sheets", googleSheetsRouter);
+  app.use("/api/integrations", integrationsRouter);
   app.use("/api", googleSheetsRouter);
 
   // Legacy JSON metrics (internal tooling)
@@ -183,7 +199,7 @@ export function createApp() {
         res,
         503,
         "DB_UNAVAILABLE",
-        "Events database is unavailable until Prisma client is generated."
+        "Events database is unavailable until Prisma client is generated.",
       );
       return;
     }
@@ -209,7 +225,11 @@ export function createApp() {
       userId?: string;
     };
 
-    const validProfiles: UserRiskProfile[] = ["conservative", "balanced", "aggressive"];
+    const validProfiles: UserRiskProfile[] = [
+      "conservative",
+      "balanced",
+      "aggressive",
+    ];
     const profile = validProfiles.includes(riskTolerance as UserRiskProfile)
       ? (riskTolerance as UserRiskProfile)
       : "balanced";
@@ -217,9 +237,13 @@ export function createApp() {
     const input: DepositWizardInput = {
       riskTolerance: profile,
       timeHorizon:
-        timeHorizon === "short" || timeHorizon === "long" ? timeHorizon : "medium",
+        timeHorizon === "short" || timeHorizon === "long"
+          ? timeHorizon
+          : "medium",
       liquidityNeeds:
-        liquidityNeeds === "high" || liquidityNeeds === "low" ? liquidityNeeds : "medium",
+        liquidityNeeds === "high" || liquidityNeeds === "low"
+          ? liquidityNeeds
+          : "medium",
     };
 
     const result = generateDepositRecommendations(input);
@@ -271,7 +295,8 @@ export function createApp() {
     ];
     if (!allowedScenarios.includes(scenario)) {
       res.status(400).json({
-        error: "Scenario must be one of: apy-collapse, liquidity-drain, oracle-shock.",
+        error:
+          "Scenario must be one of: apy-collapse, liquidity-drain, oracle-shock.",
       });
       return;
     }
