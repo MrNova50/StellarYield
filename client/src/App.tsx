@@ -71,6 +71,7 @@ import OnRampModal from "./features/onramp/OnRampModal";
 import { useWallet } from "./context/useWallet";
 import { NotificationProvider } from "./context/NotificationContext";
 import RouteBoundary from "./components/common/RouteBoundary";
+import RequireOnboarding from "./components/common/RequireOnboarding";
 import {
   Landmark,
   Zap,
@@ -79,10 +80,14 @@ import {
   X,
   Settings,
   Bell,
+  Activity,
 } from "lucide-react";
 import "./index.css";
 import SettingsModal from "./features/settings/SettingsModal";
 import AlertsModal from "./features/alerts/AlertsModal";
+import { DiagnosticsModal, DiagnosticsTrigger } from "./components/diagnostics";
+import { listenToOpenDiagnostics } from "./lib/config";
+import { useEffect } from "react";
 
 // Vault IDs available for APY alerts (matches protocol names from yieldService)
 const VAULT_OPTIONS = ["Blend", "Soroswap", "DeFindex"];
@@ -111,9 +116,14 @@ const RootLayout = () => {
   const [isOnRampOpen, setIsOnRampOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const location = useLocation();
   const isHomePage = location.pathname === "/";
+
+  useEffect(() => {
+    return listenToOpenDiagnostics(() => setIsDiagnosticsOpen(true));
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -126,6 +136,11 @@ const RootLayout = () => {
         />
       )}
       {/* Settings Modal */}
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      {/* Diagnostics Modal */}
+      <DiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -194,6 +209,7 @@ const RootLayout = () => {
                 <Bell size={16} />
               </button>
             )}
+            <DiagnosticsTrigger onClick={() => setIsDiagnosticsOpen(true)} />
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
@@ -259,6 +275,19 @@ const RootLayout = () => {
             </div>
 
             {/* Primary routes */}
+            <Link to="/" className="drawer-link"><Landmark size={16} /> Yield Vaults</Link>
+            <Link to="/" className="drawer-link"><Zap size={16} /> Strategies</Link>
+            <Link to="/" className="drawer-link"><BarChart3 size={16} /> APY Compare</Link>
+            <button
+              type="button"
+              onClick={() => {
+                setIsDrawerOpen(false);
+                setIsDiagnosticsOpen(true);
+              }}
+              className="drawer-link flex items-center gap-2 text-left w-full mt-2 pt-2 border-t border-slate-700/50"
+            >
+              <Activity size={16} /> System Diagnostics
+            </button>
             <Link to="/" className="drawer-link">
               <Landmark size={16} /> Yield Vaults
             </Link>
@@ -316,11 +345,19 @@ const router = createBrowserRouter([
       },
       {
         path: "/vault",
-        element: <Vault />,
+        element: (
+          <RequireOnboarding require="network">
+            <Vault />
+          </RequireOnboarding>
+        ),
       },
       {
         path: "/vault/:slug",
-        element: <Vault />,
+        element: (
+          <RequireOnboarding require="network">
+            <Vault />
+          </RequireOnboarding>
+        ),
       },
       {
         path: "/strategy",
@@ -350,7 +387,9 @@ const router = createBrowserRouter([
         path: "/portfolio",
         element: (
           <RouteBoundary>
-            <PortfolioPage />
+            <RequireOnboarding require="wallet">
+              <PortfolioPage />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -366,7 +405,9 @@ const router = createBrowserRouter([
         path: "/planner",
         element: (
           <RouteBoundary>
-            <GoalPlannerPage />
+            <RequireOnboarding require="wallet">
+              <GoalPlannerPage />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -374,13 +415,19 @@ const router = createBrowserRouter([
         path: "/fragmentation",
         element: (
           <RouteBoundary>
-            <FragmentationDashboard />
+            <RequireOnboarding require="wallet">
+              <FragmentationDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
       {
         path: "/governance",
         element: (
+          <RouteBoundary>
+            <RequireOnboarding require="wallet">
+              <GovernanceDashboard />
+            </RequireOnboarding>
           <RouteBoundary routeName="governance">
             <GovernanceDashboard />
           </RouteBoundary>
@@ -390,7 +437,9 @@ const router = createBrowserRouter([
         path: "/quests",
         element: (
           <RouteBoundary>
-            <QuestsDashboard />
+            <RequireOnboarding require="wallet">
+              <QuestsDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -406,7 +455,9 @@ const router = createBrowserRouter([
         path: "/rewards",
         element: (
           <RouteBoundary>
-            <ClaimRewards />
+            <RequireOnboarding require="wallet">
+              <ClaimRewards />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -414,7 +465,9 @@ const router = createBrowserRouter([
         path: "/pnl",
         element: (
           <RouteBoundary>
-            <PnLChart />
+            <RequireOnboarding require="wallet">
+              <PnLChart />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -422,7 +475,9 @@ const router = createBrowserRouter([
         path: "/taxes",
         element: (
           <RouteBoundary>
-            <TaxExport />
+            <RequireOnboarding require="wallet">
+              <TaxExport />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -430,7 +485,9 @@ const router = createBrowserRouter([
         path: "/referrals",
         element: (
           <RouteBoundary>
-            <ReferralDashboard />
+            <RequireOnboarding require="wallet">
+              <ReferralDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -438,7 +495,9 @@ const router = createBrowserRouter([
         path: "/vesting",
         element: (
           <RouteBoundary>
-            <VestingDashboard />
+            <RequireOnboarding require="wallet">
+              <VestingDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -486,13 +545,19 @@ const router = createBrowserRouter([
         path: "/wallet-session",
         element: (
           <RouteBoundary>
-            <WalletSessionReview />
+            <RequireOnboarding require="wallet">
+              <WalletSessionReview />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
       {
         path: "/treasury",
         element: (
+          <RouteBoundary>
+            <RequireOnboarding require="wallet">
+              <TreasurySimulation />
+            </RequireOnboarding>
           <RouteBoundary routeName="treasury">
             <TreasurySimulation />
           </RouteBoundary>

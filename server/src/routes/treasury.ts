@@ -12,6 +12,7 @@ import {
   assertValidScenarioInput,
   previewImport,
   TreasuryValidationError,
+  type AllocationPosition,
 } from "../services/treasurySimulationService";
 import { successEnvelope, errorEnvelope } from "../types/envelope";
 
