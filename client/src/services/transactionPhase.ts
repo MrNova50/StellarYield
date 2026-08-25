@@ -153,3 +153,12 @@ export function markReceiptDuplicate(
 }
 /** Recovery pipeline shown after a poll timeout while checking finality by hash. */
 export const TX_PHASE_RECOVERY: readonly TxPhase[] = ["recovering"];
+
+export {
+  saveTransactionDraft,
+  getTransactionDraft,
+  clearPendingTransactionDrafts,
+  clearSensitiveWalletState,
+  type TransactionDraft,
+} from "./transactionDraft";
+

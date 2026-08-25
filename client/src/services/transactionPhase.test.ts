@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   TX_PHASE_PIPELINE,
   TX_PHASE_SUBMIT_POLL,
@@ -11,6 +11,9 @@ import {
   createDepositReceipt,
   updateReceiptFromEvent,
   markReceiptDuplicate,
+  saveTransactionDraft,
+  getTransactionDraft,
+  clearPendingTransactionDrafts,
 } from "./transactionPhase";
 
 describe("transactionPhase helpers", () => {
@@ -121,3 +124,39 @@ describe("deposit receipt tracking", () => {
     expect(updated.confirmedAt).toBe("2024-01-15T10:05:00Z");
   });
 });
+
+describe("draft state management via transactionPhase", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("saves and retrieves draft for specific wallet", () => {
+    saveTransactionDraft("G_WALLET_1", {
+      id: "tx-draft-1",
+      action: "withdraw",
+      amount: 50,
+      status: "draft",
+    });
+
+    const draft = getTransactionDraft("G_WALLET_1");
+    expect(draft).not.toBeNull();
+    expect(draft?.id).toBe("tx-draft-1");
+
+    // Foreign wallet cannot retrieve it
+    expect(getTransactionDraft("G_WALLET_2")).toBeNull();
+  });
+
+  it("clears pending drafts on command", () => {
+    saveTransactionDraft("G_WALLET_1", {
+      id: "tx-draft-1",
+      action: "deposit",
+      amount: 100,
+      status: "draft",
+    });
+
+    clearPendingTransactionDrafts();
+    expect(getTransactionDraft("G_WALLET_1")).toBeNull();
+  });
+});
+
+
