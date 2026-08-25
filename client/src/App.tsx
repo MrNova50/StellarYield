@@ -42,6 +42,12 @@ const YieldCalculator = lazy(
 const StrategyComparison = lazy(
   () => import("./pages/strategy/StrategyComparison"),
 );
+const StablecoinBasketRebalance = lazy(
+  () => import("./pages/strategy/StablecoinBasketRebalance"),
+);
+const DeltaNeutralUnwind = lazy(
+  () => import("./pages/strategy/DeltaNeutralUnwind"),
+);
 const StrategyLeaderboard = lazy(
   () => import("./pages/leaderboard/StrategyLeaderboard"),
 );
@@ -330,6 +336,22 @@ const router = createBrowserRouter([
         element: (
           <RouteBoundary>
             <StrategyComparison />
+          </RouteBoundary>
+        ),
+      },
+      {
+        path: "/strategy/stablecoin-basket",
+        element: (
+          <RouteBoundary>
+            <StablecoinBasketRebalance />
+          </RouteBoundary>
+        ),
+      },
+      {
+        path: "/strategy/delta-neutral",
+        element: (
+          <RouteBoundary>
+            <DeltaNeutralUnwind />
           </RouteBoundary>
         ),
       },

@@ -10,6 +10,8 @@ import {
   type ConcentrationThresholdsInput,
 } from '../../../shared/types/exposureConcentration';
 import { readConcentrationThresholdOverrides } from '../config/concentrationThresholds';
+import { safeWalletId } from '../utils/redact';
+import { recordFailure, resolveNetworkLabel } from '../monitoring/prometheus';
 
 export type Position = { asset: string; expected: number };
 export type ProviderBalance = {
@@ -350,6 +352,12 @@ export class PortfolioReconcileService {
       }
     } catch (error) {
       await this.logReconciliationEvent(walletAddress, [], [], "failed", error);
+      await this.logReconciliationEvent(walletAddress, [], [], 'failed', error)
+      recordFailure({
+        route: 'portfolio/reconcile',
+        network: resolveNetworkLabel(),
+        failure_category: 'reconcile_failed',
+      })
       return {
         status: "failed",
         changes: [],
@@ -547,6 +555,7 @@ export class PortfolioReconcileService {
     }
     persistReconciliationEvent(entry);
     console.log(`[Reconciliation] ${status} for ${walletAddress}`)
+    console.log(`[Reconciliation] ${status} for ${safeWalletId(walletAddress)}`)
     persistReconciliationEvent(entry)
   }
 

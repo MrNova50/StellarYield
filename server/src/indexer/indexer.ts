@@ -1,5 +1,6 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { recordReplayError } from "./indexerStatus";
+import { recordFailure, resolveNetworkLabel } from "../monitoring/prometheus";
 
 const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
 const CONTRACT_ID = process.env.VITE_CONTRACT_ID || "";
@@ -582,6 +583,11 @@ export async function startIndexer() {
         error instanceof Error ? error.message : String(error),
         startLedger,
       );
+      recordFailure({
+        route: 'indexer/poll',
+        network: resolveNetworkLabel(),
+        failure_category: 'replay_error',
+      });
       setTimeout(poll, POLL_INTERVAL); // Retry
     }
   };
