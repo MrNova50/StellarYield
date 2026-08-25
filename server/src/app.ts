@@ -48,6 +48,7 @@ import offrampRouter from "./routes/offramp";
 import contactsRouter from "./routes/contacts";
 import rebalancesRouter from "./routes/rebalances";
 import sharePriceHistoryRouter from "./routes/sharePriceHistory";
+import withdrawalPreviewRouter from "./routes/withdrawalPreview";
 import reliabilityRouter from "./routes/reliability";
 import relayerStatusRouter from "./routes/relayerStatus";
 import riskRouter from "./routes/risk";
@@ -165,6 +166,7 @@ export function createApp() {
   app.use("/api/contacts", contactsRouter);
   app.use("/api/rebalances", rebalancesRouter);
   app.use("/api/vaults", sharePriceHistoryRouter);
+  app.use("/api/vaults", withdrawalPreviewRouter);
   app.use("/api/reliability", reliabilityRouter);
   app.use("/api/relayer", relayerStatusRouter);
   app.use("/api/risk", riskRouter);
@@ -340,6 +342,12 @@ export function createApp() {
     try {
       res.json(createAuthChallenge(req.body));
     } catch (error) {
+      sendError(
+        res,
+        400,
+        "INVALID_AUTH_REQUEST",
+        error instanceof Error ? error.message : "Invalid auth request.",
+      );
       res.status(400).json({
         error: error instanceof Error ? error.message : "Invalid auth request.",
         requestId: (req as unknown as { requestId?: string }).requestId,
@@ -351,6 +359,14 @@ export function createApp() {
     try {
       res.json(verifyAuthChallenge(req.body));
     } catch (error) {
+      sendError(
+        res,
+        400,
+        "INVALID_AUTH_VERIFICATION",
+        error instanceof Error
+          ? error.message
+          : "Invalid auth verification request.",
+      );
       res.status(400).json({
         error:
           error instanceof Error

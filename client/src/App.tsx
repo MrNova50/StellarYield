@@ -71,6 +71,7 @@ import OnRampModal from "./features/onramp/OnRampModal";
 import { useWallet } from "./context/useWallet";
 import { NotificationProvider } from "./context/NotificationContext";
 import RouteBoundary from "./components/common/RouteBoundary";
+import RequireOnboarding from "./components/common/RequireOnboarding";
 import {
   Landmark,
   Zap,
@@ -316,11 +317,19 @@ const router = createBrowserRouter([
       },
       {
         path: "/vault",
-        element: <Vault />,
+        element: (
+          <RequireOnboarding require="network">
+            <Vault />
+          </RequireOnboarding>
+        ),
       },
       {
         path: "/vault/:slug",
-        element: <Vault />,
+        element: (
+          <RequireOnboarding require="network">
+            <Vault />
+          </RequireOnboarding>
+        ),
       },
       {
         path: "/strategy",
@@ -350,7 +359,9 @@ const router = createBrowserRouter([
         path: "/portfolio",
         element: (
           <RouteBoundary>
-            <PortfolioPage />
+            <RequireOnboarding require="wallet">
+              <PortfolioPage />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -366,7 +377,9 @@ const router = createBrowserRouter([
         path: "/planner",
         element: (
           <RouteBoundary>
-            <GoalPlannerPage />
+            <RequireOnboarding require="wallet">
+              <GoalPlannerPage />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -374,13 +387,19 @@ const router = createBrowserRouter([
         path: "/fragmentation",
         element: (
           <RouteBoundary>
-            <FragmentationDashboard />
+            <RequireOnboarding require="wallet">
+              <FragmentationDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
       {
         path: "/governance",
         element: (
+          <RouteBoundary>
+            <RequireOnboarding require="wallet">
+              <GovernanceDashboard />
+            </RequireOnboarding>
           <RouteBoundary routeName="governance">
             <GovernanceDashboard />
           </RouteBoundary>
@@ -390,7 +409,9 @@ const router = createBrowserRouter([
         path: "/quests",
         element: (
           <RouteBoundary>
-            <QuestsDashboard />
+            <RequireOnboarding require="wallet">
+              <QuestsDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -406,7 +427,9 @@ const router = createBrowserRouter([
         path: "/rewards",
         element: (
           <RouteBoundary>
-            <ClaimRewards />
+            <RequireOnboarding require="wallet">
+              <ClaimRewards />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -414,7 +437,9 @@ const router = createBrowserRouter([
         path: "/pnl",
         element: (
           <RouteBoundary>
-            <PnLChart />
+            <RequireOnboarding require="wallet">
+              <PnLChart />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -422,7 +447,9 @@ const router = createBrowserRouter([
         path: "/taxes",
         element: (
           <RouteBoundary>
-            <TaxExport />
+            <RequireOnboarding require="wallet">
+              <TaxExport />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -430,7 +457,9 @@ const router = createBrowserRouter([
         path: "/referrals",
         element: (
           <RouteBoundary>
-            <ReferralDashboard />
+            <RequireOnboarding require="wallet">
+              <ReferralDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -438,7 +467,9 @@ const router = createBrowserRouter([
         path: "/vesting",
         element: (
           <RouteBoundary>
-            <VestingDashboard />
+            <RequireOnboarding require="wallet">
+              <VestingDashboard />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
@@ -486,13 +517,19 @@ const router = createBrowserRouter([
         path: "/wallet-session",
         element: (
           <RouteBoundary>
-            <WalletSessionReview />
+            <RequireOnboarding require="wallet">
+              <WalletSessionReview />
+            </RequireOnboarding>
           </RouteBoundary>
         ),
       },
       {
         path: "/treasury",
         element: (
+          <RouteBoundary>
+            <RequireOnboarding require="wallet">
+              <TreasurySimulation />
+            </RequireOnboarding>
           <RouteBoundary routeName="treasury">
             <TreasurySimulation />
           </RouteBoundary>
