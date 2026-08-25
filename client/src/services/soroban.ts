@@ -15,6 +15,7 @@ import {
   CustomSigner,
   FreighterSigner,
   parseContractError,
+  SubmissionTimeoutError,
   YIELD_VAULT_SPEC_HASH,
 } from "@stellaryield/sdk";
 import type { TxPhase } from "./transactionPhase";
@@ -68,6 +69,32 @@ function getVaultClient(contractId?: string): VaultClient {
     rpcUrl: RPC_URL,
     specHash: YIELD_VAULT_SPEC_HASH,
   });
+}
+
+/** Current vault share balance for a user, for populating withdraw UI. */
+export async function getUserShares(userAddress: string): Promise<bigint> {
+  const vaultClient = getVaultClient();
+  return vaultClient.getShares(userAddress);
+}
+
+/**
+ * After a poll timeout, re-checks finality by transaction hash instead of
+ * treating the timeout as a hard failure — the transaction may still land.
+ * Emits the "recovering" phase while doing so.
+ */
+async function attemptRecovery(
+  vaultClient: VaultClient,
+  txHash: string,
+  onPhase?: TxPhaseCallback,
+): Promise<{ success: true; hash: string } | { success: false }> {
+  onPhase?.("recovering");
+  try {
+    const recovered = vaultClient.recoverTransaction<bigint>(txHash);
+    const confirmed = await recovered.wait({ timeoutMs: POLL_TIMEOUT_MS, pollIntervalMs: POLL_INTERVAL_MS });
+    return { success: true, hash: confirmed.hash };
+  } catch {
+    return { success: false };
+  }
 }
 
 async function getRecommendedBaseFee(priority: FeePriority = "average"): Promise<string> {
@@ -388,7 +415,7 @@ export async function deposit(
     onPhase?.("waiting_for_wallet");
     const signer = new CustomSigner(
       userAddress,
-      signTx || ((xdr, passphrase) => signWithFreighter(xdr, passphrase))
+      signTx || ((xdr: string, passphrase: string) => signWithFreighter(xdr, passphrase))
     );
     const signed = await prepared.sign(signer);
 
@@ -411,6 +438,13 @@ export async function deposit(
     onPhase?.("success");
     return { success: true, hash: confirmed.hash };
   } catch (err) {
+    if (err instanceof SubmissionTimeoutError) {
+      const recovery = await attemptRecovery(getVaultClient(), (err as any).txHash, onPhase);
+      if (recovery.success) {
+        onPhase?.("success");
+        return { success: true, hash: recovery.hash };
+      }
+    }
     onPhase?.("failure");
     const parsed = parseContractError(err);
     return {
@@ -421,7 +455,7 @@ export async function deposit(
 }
 
 /**
- * Withdraw shares from the YieldVault contract using the SDK VaultClient & lifecycle.
+ * Withdraw shares from the YieldVault contract using the SDK VaultClient & lifecycle. using the SDK VaultClient & lifecycle.
  */
 export async function withdraw(
   userAddress: string,
@@ -441,7 +475,7 @@ export async function withdraw(
     onPhase?.("waiting_for_wallet");
     const signer = new CustomSigner(
       userAddress,
-      signTx || ((xdr, passphrase) => signWithFreighter(xdr, passphrase))
+      signTx || ((xdr: string, passphrase: string) => signWithFreighter(xdr, passphrase))
     );
     const signed = await prepared.sign(signer);
 
@@ -452,6 +486,13 @@ export async function withdraw(
     onPhase?.("success");
     return { success: true, hash: confirmed.hash };
   } catch (err) {
+    if (err instanceof SubmissionTimeoutError) {
+      const recovery = await attemptRecovery(getVaultClient(), (err as any).txHash, onPhase);
+      if (recovery.success) {
+        onPhase?.("success");
+        return { success: true, hash: recovery.hash };
+      }
+    }
     onPhase?.("failure");
     const parsed = parseContractError(err);
     return {

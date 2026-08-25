@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useDepositImpact } from "./useDepositImpact";
+import type { QuoteSnapshot } from "./useDepositImpact";
 
 const base = {
   amountUsd: 0,
@@ -9,12 +10,25 @@ const base = {
   isStale: false,
 };
 
+function makeQuote(overrides: Partial<QuoteSnapshot> = {}): QuoteSnapshot {
+  return {
+    quotedAt: new Date().toISOString(),
+    route: ["CXLM", "CVAULT"],
+    expectedOut: 10_000_000n,
+    minOut: 9_950_000n,
+    isFallback: false,
+    isStale: false,
+    ...overrides,
+  };
+}
+
 describe("useDepositImpact", () => {
   it("returns severity=none for baseline inputs", () => {
     const { result } = renderHook(() => useDepositImpact(base));
     expect(result.current.severity).toBe("none");
     expect(result.current.reasons).toHaveLength(0);
     expect(result.current.impactScore).toBe(0);
+    expect(result.current.shouldBlock).toBe(false);
   });
 
   it("adds slippage reason for elevated slippage (3–7%)", () => {
@@ -26,7 +40,6 @@ describe("useDepositImpact", () => {
   });
 
   it("reaches warning severity when elevated slippage combines with fallback", () => {
-    // slippage 5%: +20, fallback: +15 → 35 → warning
     const { result } = renderHook(() =>
       useDepositImpact({ ...base, slippageTolerance: 5, isFallback: true }),
     );
@@ -35,7 +48,6 @@ describe("useDepositImpact", () => {
   });
 
   it("reaches warning severity for high slippage (>=8%)", () => {
-    // high slippage: +40 → warning
     const { result } = renderHook(() =>
       useDepositImpact({ ...base, slippageTolerance: 8 }),
     );
@@ -45,7 +57,6 @@ describe("useDepositImpact", () => {
   });
 
   it("reaches critical severity when high slippage and large deposit combine", () => {
-    // high slippage: +40, large deposit: +40 → 80 → critical
     const { result } = renderHook(() =>
       useDepositImpact({ ...base, slippageTolerance: 8, amountUsd: 600_000 }),
     );
@@ -111,7 +122,6 @@ describe("useDepositImpact", () => {
   });
 
   it("reaches critical when very low execution quality combines with large deposit", () => {
-    // low quality: +35, large deposit: +40 → 75 → critical
     const { result } = renderHook(() =>
       useDepositImpact({ ...base, executionQualityScore: 40, amountUsd: 600_000 }),
     );
@@ -139,5 +149,104 @@ describe("useDepositImpact", () => {
     );
     expect(result.current.impactScore).toBeLessThanOrEqual(100);
     expect(result.current.severity).toBe("critical");
+  });
+
+  describe("quote tracking", () => {
+    it("adds output delta reason when quote changes significantly", () => {
+      const quote = makeQuote({
+        expectedOut: 9_000_000n,
+        prevExpectedOut: 10_000_000n,
+      });
+      const { result } = renderHook(() =>
+        useDepositImpact({ ...base, quote }),
+      );
+      expect(result.current.reasons.some((r) => r.includes("changed by"))).toBe(true);
+      expect(result.current.impactScore).toBe(25);
+    });
+
+    it("adds minor route variation reason for 5-10% output change", () => {
+      const quote = makeQuote({
+        expectedOut: 9_400_000n,
+        prevExpectedOut: 10_000_000n,
+      });
+      const { result } = renderHook(() =>
+        useDepositImpact({ ...base, quote }),
+      );
+      expect(result.current.reasons.some((r) => r.includes("minor route variation"))).toBe(true);
+      expect(result.current.impactScore).toBe(10);
+    });
+
+    it("no output delta reason when quote is stable", () => {
+      const quote = makeQuote({
+        expectedOut: 9_900_000n,
+        prevExpectedOut: 10_000_000n,
+      });
+      const { result } = renderHook(() =>
+        useDepositImpact({ ...base, quote }),
+      );
+      expect(result.current.reasons.some((r) => r.includes("changed by"))).toBe(false);
+    });
+
+    it("adds freshness reason for old quotes", () => {
+      const oldDate = new Date(Date.now() - 120_000).toISOString();
+      const quote = makeQuote({ quotedAt: oldDate });
+      const { result } = renderHook(() =>
+        useDepositImpact({ ...base, quote }),
+      );
+      expect(result.current.reasons.some((r) => r.includes("freshness degraded"))).toBe(true);
+    });
+  });
+
+  describe("blocking", () => {
+    it("blocks when quote is stale and blockStaleQuotes is true", () => {
+      const { result } = renderHook(() =>
+        useDepositImpact({ ...base, isStale: true, blockStaleQuotes: true }),
+      );
+      expect(result.current.shouldBlock).toBe(true);
+      expect(result.current.blockReason).toContain("stale");
+    });
+
+    it("does not block when quote is stale but blockStaleQuotes is false", () => {
+      const { result } = renderHook(() =>
+        useDepositImpact({ ...base, isStale: true, blockStaleQuotes: false }),
+      );
+      expect(result.current.shouldBlock).toBe(false);
+    });
+
+    it("blocks when impact score exceeds route threshold", () => {
+      const { result } = renderHook(() =>
+        useDepositImpact({
+          ...base,
+          slippageTolerance: 10,
+          amountUsd: 600_000,
+          routeImpactThreshold: 70,
+        }),
+      );
+      expect(result.current.shouldBlock).toBe(true);
+      expect(result.current.blockReason).toContain("threshold");
+    });
+
+    it("does not block when impact score is below route threshold", () => {
+      const { result } = renderHook(() =>
+        useDepositImpact({
+          ...base,
+          slippageTolerance: 5,
+          routeImpactThreshold: 70,
+        }),
+      );
+      expect(result.current.shouldBlock).toBe(false);
+    });
+
+    it("stale quote blocks even at low impact", () => {
+      const { result } = renderHook(() =>
+        useDepositImpact({
+          ...base,
+          slippageTolerance: 1,
+          isStale: true,
+          blockStaleQuotes: true,
+        }),
+      );
+      expect(result.current.shouldBlock).toBe(true);
+    });
   });
 });

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Zap, Loader2, AlertTriangle, RefreshCw, Clock, Info } from "lucide-react";
+import { ArrowDown, Zap, Loader2, AlertTriangle, RefreshCw, Clock, Info, Ban } from "lucide-react";
 import TxStatusTimeline from "../../components/transaction/TxStatusTimeline";
+import TransactionFailedModal from "../../components/transaction/TransactionFailedModal";
+import { decodeTransactionError } from "../../utils/errorDecoder";
 import { zapDeposit } from "../../services/soroban";
 import type { TxPhase } from "../../services/transactionPhase";
 import { TX_PHASE_PIPELINE } from "../../services/transactionPhase";
-import { fetchSwapQuote } from "./fetchSwapQuote";
+import { fetchSwapQuote, verifySwapQuote } from "./fetchSwapQuote";
 import { minAmountAfterSlippage } from "./slippage";
 import { parseDecimalToStroops, formatStroopsToDecimal } from "./amount";
 import {
@@ -20,6 +22,8 @@ import type { ZapAssetOption, ZapQuoteResponse } from "./types";
 import { useSettings } from "../settings/SettingsContext";
 import { resolveSlippage } from "../settings/types";
 import DepositRouteMaterialImpactWarning from "./DepositRouteMaterialImpactWarning";
+import { useDepositImpact } from "./useDepositImpact";
+import type { QuoteSnapshot } from "./useDepositImpact";
 
 export interface ZapDepositPanelProps {
   walletAddress: string | null;
@@ -84,6 +88,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const [lastProgressPhase, setLastProgressPhase] = useState<TxPhase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [showFailedModal, setShowFailedModal] = useState(false);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [expectedOut, setExpectedOut] = useState<bigint | null>(null);
   const [quotePath, setQuotePath] = useState<string>("");
@@ -91,11 +96,13 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const [quoteData, setQuoteData] = useState<ZapQuoteResponse | null>(null);
   const [slippageTolerance, setSlippageTolerance] = useState(settingsSlippage);
   const [showSlippageEdit, setShowSlippageEdit] = useState(false);
+  const prevExpectedOutRef = useRef<bigint | null>(null);
 
   const needsSwap = inputAsset?.contractId !== vaultToken.contractId;
 
   const refreshQuote = useCallback(async () => {
     if (!inputAsset || !amount || !vaultToken.contractId) {
+      prevExpectedOutRef.current = null;
       setExpectedOut(null);
       setQuotePath("");
       setQuoteData(null);
@@ -117,6 +124,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     setError("");
     try {
       if (!needsSwap) {
+        prevExpectedOutRef.current = expectedOut;
         setExpectedOut(stroops);
         setQuotePath(`${inputAsset.symbol} (no swap)`);
         setQuoteSource("direct");
@@ -130,19 +138,21 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
           vaultDecimals: vaultToken.decimals,
           slippageTolerance: slippageTolerance / 100,
         });
+        prevExpectedOutRef.current = expectedOut;
         setExpectedOut(BigInt(q.expectedAmountOutStroops));
         setQuotePath(q.path.map((h) => h.label ?? h.contractId.slice(0, 6)).join(" → "));
         setQuoteSource(q.source);
         setQuoteData(q);
       }
     } catch (e) {
+      prevExpectedOutRef.current = null;
       setExpectedOut(null);
       setError(e instanceof Error ? e.message : "Could not load quote");
       setQuoteData(null);
     } finally {
       setQuoteLoading(false);
     }
-  }, [amount, inputAsset, needsSwap, slippageTolerance, vaultToken]);
+  }, [amount, inputAsset, needsSwap, slippageTolerance, vaultToken, expectedOut]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -165,6 +175,30 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     if (!quoteData) return false;
     return quoteData.isFallback || quoteData.source === FALLBACK_SOURCE;
   }, [quoteData]);
+
+  const quoteSnapshot = useMemo<QuoteSnapshot | undefined>(() => {
+    if (!quoteData || !expectedOut || expectedOut <= 0n) return undefined;
+    const minOutVal = minAmountAfterSlippage(expectedOut, slippageTolerance);
+    return {
+      quotedAt: quoteData.quotedAt,
+      route: quoteData.path.map((h) => h.contractId),
+      expectedOut,
+      minOut: minOutVal,
+      prevExpectedOut: prevExpectedOutRef.current ?? undefined,
+      isFallback,
+      isStale,
+      source: quoteData.source,
+    };
+  }, [quoteData, expectedOut, slippageTolerance, isFallback, isStale]);
+
+  const depositImpact = useDepositImpact({
+    amountUsd: 0,
+    slippageTolerance,
+    isFallback,
+    isStale,
+    quote: quoteSnapshot,
+    blockStaleQuotes: true,
+  });
 
   const emitPhase = useCallback((p: TxPhase) => {
     setTxPhase(p);
@@ -200,7 +234,16 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     setTxHash(null);
     setStatus("loading");
     setError("");
+    setShowFailedModal(false);
     try {
+      if (quoteData) {
+        const isValid = await verifySwapQuote(quoteData);
+        if (!isValid) {
+          setError('Quote validation failed. Please refresh and try again.');
+          setShowFailedModal(true);
+          return;
+        }
+      }
       const result = await zapDeposit(
         walletAddress,
         {
@@ -224,6 +267,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "Transaction failed");
+      setShowFailedModal(true);
     }
   }, [
     walletAddress,
@@ -473,6 +517,8 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
             slippageTolerance={slippageTolerance}
             isFallback={isFallback}
             isStale={isStale}
+            quote={quoteSnapshot}
+            blockStaleQuotes={true}
           />
         </div>
       )}
@@ -482,6 +528,24 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
           <AlertTriangle className="w-4 h-4 shrink-0" />
           {error}
         </div>
+      )}
+
+      {showFailedModal && txPhase === "failure" && error && (
+        <TransactionFailedModal
+          error={decodeTransactionError(error)}
+          onClose={() => setShowFailedModal(false)}
+          onRetry={() => {
+            setShowFailedModal(false);
+            retryZap();
+          }}
+          failurePhase={
+            lastProgressPhase !== "idle" &&
+            lastProgressPhase !== "success" &&
+            lastProgressPhase !== "failure"
+              ? lastProgressPhase
+              : "polling"
+          }
+        />
       )}
 
       <TxStatusTimeline
@@ -500,6 +564,18 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
         className="mb-4"
       />
 
+      {/* Blocked state banner */}
+      {depositImpact.shouldBlock && (
+        <div
+          className="mb-4 flex items-center gap-2 text-red-300 text-sm bg-red-500/10 border border-red-500/30 rounded-lg p-3"
+          role="alert"
+          aria-live="assertive"
+        >
+          <Ban className="w-4 h-4 shrink-0" />
+          <span>{depositImpact.blockReason}</span>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={() => void handleZap()}
@@ -508,7 +584,8 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
           !amount ||
           status === "loading" ||
           minOut === null ||
-          minOut <= 0n
+          minOut <= 0n ||
+          depositImpact.shouldBlock
         }
         className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
