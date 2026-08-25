@@ -61,6 +61,7 @@ import vaultActivityRouter from "./routes/vaultActivity";
 import watchlistRouter from "./routes/watchlist";
 import portfolioMovementRouter from "./routes/portfolioMovement";
 import digestScheduleRouter from "./routes/digestScheduleSettings";
+import integrationsRouter from "./routes/integrations";
 
 import { createAuthChallenge, verifyAuthChallenge } from "./utils/stellarAuth";
 import {
@@ -175,6 +176,7 @@ export function createApp() {
   app.use("/api/portfolio", portfolioMovementRouter);
   app.use("/api/digest/schedule", digestScheduleRouter);
   app.use("/api/google-sheets", googleSheetsRouter);
+  app.use("/api/integrations", integrationsRouter);
   app.use("/api", googleSheetsRouter);
 
   // Legacy JSON metrics (internal tooling)
