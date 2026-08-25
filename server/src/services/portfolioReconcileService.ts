@@ -5,6 +5,7 @@ import {
   type ConcentrationThresholdsInput,
 } from '../../../shared/types/exposureConcentration';
 import { readConcentrationThresholdOverrides } from '../config/concentrationThresholds';
+import { safeWalletId } from '../utils/redact';
 
 export type Position = { asset: string; expected: number };
 export type ProviderBalance = { provider: string; asset: string; balance?: number };
@@ -447,7 +448,7 @@ export class PortfolioReconcileService {
     if (metadata) {
       entry.metadata = metadata
     }
-    console.log(`[Reconciliation] ${status} for ${walletAddress}`)
+    console.log(`[Reconciliation] ${status} for ${safeWalletId(walletAddress)}`)
     persistReconciliationEvent(entry)
   }
 
