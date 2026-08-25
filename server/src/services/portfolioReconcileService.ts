@@ -6,6 +6,7 @@ import {
 } from '../../../shared/types/exposureConcentration';
 import { readConcentrationThresholdOverrides } from '../config/concentrationThresholds';
 import { safeWalletId } from '../utils/redact';
+import { recordFailure, resolveNetworkLabel } from '../monitoring/prometheus';
 
 export type Position = { asset: string; expected: number };
 export type ProviderBalance = { provider: string; asset: string; balance?: number };
@@ -259,6 +260,11 @@ export class PortfolioReconcileService {
       }
     } catch (error) {
       await this.logReconciliationEvent(walletAddress, [], [], 'failed', error)
+      recordFailure({
+        route: 'portfolio/reconcile',
+        network: resolveNetworkLabel(),
+        failure_category: 'reconcile_failed',
+      })
       return {
         status: 'failed',
         changes: [],

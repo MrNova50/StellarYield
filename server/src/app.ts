@@ -62,6 +62,8 @@ import watchlistRouter from "./routes/watchlist";
 import portfolioMovementRouter from "./routes/portfolioMovement";
 import digestScheduleRouter from "./routes/digestScheduleSettings";
 import integrationsRouter from "./routes/integrations";
+import stablecoinBasketRouter from "./routes/stablecoinBasket";
+import deltaNeutralRouter from "./routes/deltaNeutral";
 
 import { createAuthChallenge, verifyAuthChallenge } from "./utils/stellarAuth";
 import {
@@ -175,6 +177,8 @@ export function createApp() {
   app.use("/api/watchlist", watchlistRouter);
   app.use("/api/portfolio", portfolioMovementRouter);
   app.use("/api/digest/schedule", digestScheduleRouter);
+  app.use("/api/strategies/stablecoin-basket", stablecoinBasketRouter);
+  app.use("/api/strategies/delta-neutral", deltaNeutralRouter);
   app.use("/api/google-sheets", googleSheetsRouter);
   app.use("/api/integrations", integrationsRouter);
   app.use("/api", googleSheetsRouter);
