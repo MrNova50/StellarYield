@@ -12,7 +12,10 @@ import { authMiddleware } from "./middleware/auth";
 import { sendError } from "./utils/errorResponse";
 import { requestContextMiddleware } from "./middleware/requestContext";
 import { correlationIdMiddleware } from "./middleware/correlationId";
-import { errorHandler, requestLoggerMiddleware } from "./middleware/requestLogger";
+import {
+  errorHandler,
+  requestLoggerMiddleware,
+} from "./middleware/requestLogger";
 import yieldsRouter from "./routes/yields";
 import leaderboardRouter from "./routes/leaderboard";
 import notificationsRouter from "./routes/notifications";
@@ -45,6 +48,7 @@ import offrampRouter from "./routes/offramp";
 import contactsRouter from "./routes/contacts";
 import rebalancesRouter from "./routes/rebalances";
 import sharePriceHistoryRouter from "./routes/sharePriceHistory";
+import withdrawalPreviewRouter from "./routes/withdrawalPreview";
 import reliabilityRouter from "./routes/reliability";
 import relayerStatusRouter from "./routes/relayerStatus";
 import riskRouter from "./routes/risk";
@@ -60,7 +64,10 @@ import {
   type DepositWizardInput,
   type UserRiskProfile,
 } from "./services/depositRecommendationService";
-import { runStressScenario, StressScenarioType } from "./services/stressScenarioService";
+import {
+  runStressScenario,
+  StressScenarioType,
+} from "./services/stressScenarioService";
 
 type EventsPrismaClient = {
   event: {
@@ -147,6 +154,7 @@ export function createApp() {
   app.use("/api/contacts", contactsRouter);
   app.use("/api/rebalances", rebalancesRouter);
   app.use("/api/vaults", sharePriceHistoryRouter);
+  app.use("/api/vaults", withdrawalPreviewRouter);
   app.use("/api/reliability", reliabilityRouter);
   app.use("/api/relayer", relayerStatusRouter);
   app.use("/api/risk", riskRouter);
@@ -166,7 +174,7 @@ export function createApp() {
         res,
         503,
         "DB_UNAVAILABLE",
-        "Events database is unavailable until Prisma client is generated."
+        "Events database is unavailable until Prisma client is generated.",
       );
       return;
     }
@@ -192,7 +200,11 @@ export function createApp() {
       userId?: string;
     };
 
-    const validProfiles: UserRiskProfile[] = ["conservative", "balanced", "aggressive"];
+    const validProfiles: UserRiskProfile[] = [
+      "conservative",
+      "balanced",
+      "aggressive",
+    ];
     const profile = validProfiles.includes(riskTolerance as UserRiskProfile)
       ? (riskTolerance as UserRiskProfile)
       : "balanced";
@@ -200,9 +212,13 @@ export function createApp() {
     const input: DepositWizardInput = {
       riskTolerance: profile,
       timeHorizon:
-        timeHorizon === "short" || timeHorizon === "long" ? timeHorizon : "medium",
+        timeHorizon === "short" || timeHorizon === "long"
+          ? timeHorizon
+          : "medium",
       liquidityNeeds:
-        liquidityNeeds === "high" || liquidityNeeds === "low" ? liquidityNeeds : "medium",
+        liquidityNeeds === "high" || liquidityNeeds === "low"
+          ? liquidityNeeds
+          : "medium",
     };
 
     const result = generateDepositRecommendations(input);
@@ -254,7 +270,8 @@ export function createApp() {
     ];
     if (!allowedScenarios.includes(scenario)) {
       res.status(400).json({
-        error: "Scenario must be one of: apy-collapse, liquidity-drain, oracle-shock.",
+        error:
+          "Scenario must be one of: apy-collapse, liquidity-drain, oracle-shock.",
       });
       return;
     }
@@ -304,7 +321,7 @@ export function createApp() {
         res,
         400,
         "INVALID_AUTH_REQUEST",
-        error instanceof Error ? error.message : "Invalid auth request."
+        error instanceof Error ? error.message : "Invalid auth request.",
       );
       res.status(400).json({
         error: error instanceof Error ? error.message : "Invalid auth request.",
@@ -321,7 +338,9 @@ export function createApp() {
         res,
         400,
         "INVALID_AUTH_VERIFICATION",
-        error instanceof Error ? error.message : "Invalid auth verification request."
+        error instanceof Error
+          ? error.message
+          : "Invalid auth verification request.",
       );
       res.status(400).json({
         error:
