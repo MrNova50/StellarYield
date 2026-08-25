@@ -77,63 +77,39 @@ const RECEIPT_STATUS_CLASSES: Record<DepositReceiptStatus, string> = {
   mismatched: 'sev-critical',
 };
 
-export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
-  return (
-    <div className="portfolio-reconcile">
-      <table>
-        <thead>
-          <tr>
-            <th>Asset</th>
-            <th>Expected</th>
-            <th>Observed</th>
-            <th>Delta</th>
-            <th>Severity</th>
+/** Deposit receipts reconciled against indexed vault events. */
+const DepositReceiptTable: React.FC<{ receipts: DepositReceiptRow[] }> = ({ receipts }) => (
+  <>
+    <h3 className="receipt-section-title">Deposit Receipts</h3>
+    <table className="receipt-table">
+      <thead>
+        <tr>
+          <th>Tx Hash</th>
+          <th>Asset</th>
+          <th>Amount</th>
+          <th>Shares</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {receipts.map((r) => (
+          <tr
+            key={r.txHash}
+            className={RECEIPT_STATUS_CLASSES[r.status]}
+            data-testid={`receipt-${r.txHash}`}
+          >
+            <td title={r.txHash}>{r.txHash.slice(0, 8)}...</td>
+            <td>{r.assetId}</td>
+            <td>{r.amount}</td>
+            <td>{r.sharesAssigned ?? "—"}</td>
+            <td>{RECEIPT_STATUS_LABELS[r.status]}</td>
           </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.asset} className={`sev-${r.severity}`}>
-              <td>{r.asset}</td>
-              <td>{r.expected}</td>
-              <td>{r.observed === null ? '—' : r.observed}</td>
-              <td>{r.delta === null ? '—' : r.delta}</td>
-              <td>{r.severity}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        ))}
+      </tbody>
+    </table>
+  </>
+);
 
-      {receipts && receipts.length > 0 && (
-        <>
-          <h3 className="receipt-section-title">Deposit Receipts</h3>
-          <table className="receipt-table">
-            <thead>
-              <tr>
-                <th>Tx Hash</th>
-                <th>Asset</th>
-                <th>Amount</th>
-                <th>Shares</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {receipts.map((r) => (
-                <tr
-                  key={r.txHash}
-                  className={RECEIPT_STATUS_CLASSES[r.status]}
-                  data-testid={`receipt-${r.txHash}`}
-                >
-                  <td title={r.txHash}>{r.txHash.slice(0, 8)}...</td>
-                  <td>{r.assetId}</td>
-                  <td>{r.amount}</td>
-                  <td>{r.sharesAssigned ?? '—'}</td>
-                  <td>{RECEIPT_STATUS_LABELS[r.status]}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
 function groupByVault(rows: ReconcileRow[]): ReconcileGroup[] {
   const map = new Map<string, ReconcileRow[]>();
   for (const row of rows) {
@@ -193,7 +169,7 @@ const ANOMALY_LABELS: Record<ReconcileAnomalyType, string> = {
   orphaned: "Orphaned",
 };
 
-export const PortfolioReconcile: React.FC<Props> = ({ rows }) => {
+export const PortfolioReconcile: React.FC<Props> = ({ rows, receipts }) => {
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showStaleOnly, setShowStaleOnly] = useState(false);
@@ -248,6 +224,7 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows }) => {
             Reconciliation differences will appear here once data is available.
           </p>
         </div>
+        {receipts && receipts.length > 0 && <DepositReceiptTable receipts={receipts} />}
       </div>
     );
   }
@@ -381,6 +358,8 @@ export const PortfolioReconcile: React.FC<Props> = ({ rows }) => {
           )}
         </div>
       ))}
+
+      {receipts && receipts.length > 0 && <DepositReceiptTable receipts={receipts} />}
     </div>
   );
 };
