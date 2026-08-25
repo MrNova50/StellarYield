@@ -6,7 +6,7 @@ import { decodeTransactionError } from "../../utils/errorDecoder";
 import { zapDeposit } from "../../services/soroban";
 import type { TxPhase } from "../../services/transactionPhase";
 import { TX_PHASE_PIPELINE } from "../../services/transactionPhase";
-import { fetchSwapQuote, verifySwapQuote } from "./fetchSwapQuote";
+import { fetchSwapQuote, isQuoteCancellation, verifySwapQuote } from "./fetchSwapQuote";
 import { minAmountAfterSlippage } from "./slippage";
 import { parseDecimalToStroops, formatStroopsToDecimal } from "./amount";
 import {
@@ -97,6 +97,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const [slippageTolerance, setSlippageTolerance] = useState(settingsSlippage);
   const [showSlippageEdit, setShowSlippageEdit] = useState(false);
   const prevExpectedOutRef = useRef<bigint | null>(null);
+  const quoteAbortRef = useRef<AbortController | null>(null);
 
   const needsSwap = inputAsset?.contractId !== vaultToken.contractId;
 
@@ -120,6 +121,10 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
       return;
     }
 
+    const controller = new AbortController();
+    quoteAbortRef.current?.abort();
+    quoteAbortRef.current = controller;
+
     setQuoteLoading(true);
     setError("");
     try {
@@ -130,14 +135,18 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
         setQuoteSource("direct");
         setQuoteData(null);
       } else {
-        const q = await fetchSwapQuote({
-          inputTokenContract: inputAsset.contractId,
-          vaultTokenContract: vaultToken.contractId,
-          amountInStroops: stroops.toString(),
-          inputDecimals: inputAsset.decimals,
-          vaultDecimals: vaultToken.decimals,
-          slippageTolerance: slippageTolerance / 100,
-        });
+        const q = await fetchSwapQuote(
+          {
+            inputTokenContract: inputAsset.contractId,
+            vaultTokenContract: vaultToken.contractId,
+            amountInStroops: stroops.toString(),
+            inputDecimals: inputAsset.decimals,
+            vaultDecimals: vaultToken.decimals,
+            slippageTolerance: slippageTolerance / 100,
+          },
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
         prevExpectedOutRef.current = expectedOut;
         setExpectedOut(BigInt(q.expectedAmountOutStroops));
         setQuotePath(q.path.map((h) => h.label ?? h.contractId.slice(0, 6)).join(" → "));
@@ -145,12 +154,17 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
         setQuoteData(q);
       }
     } catch (e) {
+      if (isQuoteCancellation(e) || controller.signal.aborted) {
+        return;
+      }
       prevExpectedOutRef.current = null;
       setExpectedOut(null);
       setError(e instanceof Error ? e.message : "Could not load quote");
       setQuoteData(null);
     } finally {
-      setQuoteLoading(false);
+      if (!controller.signal.aborted) {
+        setQuoteLoading(false);
+      }
     }
   }, [amount, inputAsset, needsSwap, slippageTolerance, vaultToken, expectedOut]);
 
@@ -158,7 +172,10 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     const t = setTimeout(() => {
       void refreshQuote();
     }, 350);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      quoteAbortRef.current?.abort();
+    };
   }, [refreshQuote]);
 
   const minOut = useMemo(() => {

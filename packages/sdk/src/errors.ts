@@ -163,6 +163,39 @@ export class ApiTimeoutError extends SorobanSdkError {
   }
 }
 
+/**
+ * Caller-initiated cancellation via AbortSignal (route change, input edit, unmount).
+ * Distinct from {@link ApiTimeoutError}; not retryable.
+ */
+export class ApiCancelledError extends SorobanSdkError {
+  public readonly path: string;
+  public readonly cancelled = true as const;
+
+  constructor(path: string, reason?: string) {
+    super(
+      reason
+        ? `API request to '${path}' was cancelled: ${reason}`
+        : `API request to '${path}' was cancelled`,
+      undefined,
+      false
+    );
+    this.path = path;
+  }
+}
+
+/** True when an error represents intentional request cancellation (not a timeout). */
+export function isApiCancellation(error: unknown): boolean {
+  if (error instanceof ApiCancelledError) return true;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { cancelled?: boolean }).cancelled === true
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Underlying network failure (DNS, connection reset, offline, etc.). */
 export class ApiNetworkError extends SorobanSdkError {
   public readonly path: string;
