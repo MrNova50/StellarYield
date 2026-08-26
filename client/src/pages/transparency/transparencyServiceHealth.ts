@@ -188,7 +188,6 @@ export function assessRegistryFromRecords(
       if (newAddr === "" && oldAddr !== "") hasRemoved = true;
       else if (newAddr === "" && oldAddr === "") hasMissing = true;
       else if (oldAddr !== newAddr && oldAddr !== "" && newAddr !== "") hasChanged = true;
-      else if (newAddr === "" && oldAddr === "") hasMissing = true;
     }
   }
 
