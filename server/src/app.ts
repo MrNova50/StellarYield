@@ -41,6 +41,7 @@ import correlationRouter from "./routes/correlation";
 import strategiesRouter from "./routes/strategies";
 import treasuryRouter from "./routes/treasury";
 import governanceRouter from "./routes/governance";
+import governanceVoteReceiptsRouter from "./routes/governanceVoteReceipts";
 import activityTimelineRouter from "./routes/activityTimeline";
 import presetsRouter from "./routes/presets";
 import analyticsRouter from "./routes/analytics";
@@ -159,6 +160,7 @@ export function createApp() {
   app.use("/api/strategies", strategiesRouter);
   app.use("/api/treasury", treasuryRouter);
   app.use("/api/governance", governanceRouter);
+  app.use("/api/governance", governanceVoteReceiptsRouter);
   app.use("/api/portfolio/activity", activityTimelineRouter);
   app.use("/api/presets", presetsRouter);
   app.use("/api/analytics", analyticsRouter);

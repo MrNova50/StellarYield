@@ -22,6 +22,8 @@ export interface VaultStats {
   protocol: string;
   apy: number;
   tvl: number;
+  /** Vault risk level label (Low | Medium | High) from the yields API. */
+  risk: string;
   /** Whether the data came from the live API (true) or fallback defaults (false). */
   live: boolean;
 }
@@ -85,12 +87,13 @@ export async function fetchVaultStats(
       ...meta,
       apy: entry?.apy ?? 0,
       tvl: entry?.tvl ?? 0,
+      risk: entry?.risk ?? "Unknown",
       live: !!entry,
     };
   } catch (error) {
     console.error("Error fetching vault stats:", error);
     // Graceful degradation: return meta with zeroed stats, marked as not live
-    return { ...meta, apy: 0, tvl: 0, live: false };
+    return { ...meta, apy: 0, tvl: 0, risk: "Unknown", live: false };
   }
 }
 
