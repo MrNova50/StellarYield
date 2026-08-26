@@ -50,15 +50,24 @@ export interface RecommendationTimelineEntry {
 const MAX_ENTRIES_PER_USER = 20;
 const historyStore = new Map<string, RecommendationTimelineEntry[]>();
 
-export const REASON_CODE_LABELS: Record<ReasonCode, { label: string; description: string; severity: "info" | "warning" | "critical" }> = {
+export const REASON_CODE_LABELS: Record<
+  ReasonCode,
+  {
+    label: string;
+    description: string;
+    severity: "info" | "warning" | "critical";
+  }
+> = {
   "risk-tolerance-change": {
     label: "Risk Tolerance Adjusted",
-    description: "Your risk tolerance input changed, affecting the recommendation.",
+    description:
+      "Your risk tolerance input changed, affecting the recommendation.",
     severity: "warning",
   },
   "apy-shift": {
     label: "APY Shift Detected",
-    description: "Projected APY changed significantly, triggering a re-evaluation.",
+    description:
+      "Projected APY changed significantly, triggering a re-evaluation.",
     severity: "info",
   },
   "liquidity-change": {
@@ -130,7 +139,9 @@ function generateReasonCodes(
     });
   }
 
-  if (Math.abs(previous.liquidityDepthUsd - current.liquidityDepthUsd) >= 50_000) {
+  if (
+    Math.abs(previous.liquidityDepthUsd - current.liquidityDepthUsd) >= 50_000
+  ) {
     codes.push({
       code: "liquidity-change",
       label: REASON_CODE_LABELS["liquidity-change"].label,
@@ -171,7 +182,9 @@ function diffInputs(
     changed.push("expectedApy");
   }
 
-  if (Math.abs(previous.liquidityDepthUsd - current.liquidityDepthUsd) >= 50_000) {
+  if (
+    Math.abs(previous.liquidityDepthUsd - current.liquidityDepthUsd) >= 50_000
+  ) {
     changed.push("liquidityDepthUsd");
   }
 
