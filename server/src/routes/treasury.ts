@@ -1,5 +1,6 @@
 import rateLimit from "express-rate-limit";
 import { Router, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import {
   simulateTreasury,
   compareTreasuryScenarios,
@@ -12,6 +13,7 @@ import {
   assertValidScenarioInput,
   previewImport,
   TreasuryValidationError,
+  type AllocationPosition,
 } from "../services/treasurySimulationService";
 import { successEnvelope, errorEnvelope } from "../types/envelope";
 

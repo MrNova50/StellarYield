@@ -187,8 +187,8 @@ export default function TransparencyDashboard() {
     useEffect(() => {
         async function loadServiceHealth() {
             const registryState = assessRegistryFromRecords(
-                registryJson as Record<string, Record<string, string>>,
-                prevRegistryJson as Record<string, Record<string, string>>,
+                registryJson as unknown as Record<string, Record<string, string>>,
+                prevRegistryJson as unknown as Record<string, Record<string, string>>,
             );
 
             let indexerState: SubsystemState = "unknown";

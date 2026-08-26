@@ -195,6 +195,19 @@ Before requesting a review on a **Stellar Wave** PR, please review the **[Releas
 
 See [docs/release-checklist.md](./docs/release-checklist.md) for the full checklist and guidance on deployment (for maintainers).
 
+## Yield Normalization
+
+Any change that produces, aggregates, or displays a yield figure must follow the
+[yield normalization contract](./server/docs/yield-normalization-contract.md):
+APY in percent at two decimals, USD in dollars at two decimals, rounded half
+away from zero, exactly once, at the point the value is emitted.
+
+Import the helpers from `server/src/utils/yieldNormalizationContract.ts` rather
+than writing a local `round2` or dividing by `100` inline — a local copy is how
+feed ingestion and portfolio summaries drift apart. `npm test --prefix server -- yieldNormalization`
+runs the parity checks, and `GET /api/yields/parity` reports the same
+diagnostics against a running server.
+
 ## Contract Security
 
 Pull requests that touch `contracts/` must pass the checklist in [docs/contract-security-checklist.md](./docs/contract-security-checklist.md) before review. The checklist covers storage schema changes, authorization checks, arithmetic safety, test coverage, and admin permission review.

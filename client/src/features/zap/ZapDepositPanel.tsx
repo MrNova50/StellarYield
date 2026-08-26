@@ -97,12 +97,19 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const [slippageTolerance, setSlippageTolerance] = useState(settingsSlippage);
   const [showSlippageEdit, setShowSlippageEdit] = useState(false);
   const prevExpectedOutRef = useRef<bigint | null>(null);
+  // Tracks the most recently fetched route, independent of React state, so a
+  // route-path change can be detected even when the headline output amount
+  // stays nominally the same between fetches.
+  const latestRouteRef = useRef<string[] | null>(null);
+  const prevRouteRef = useRef<string[] | null>(null);
 
   const needsSwap = inputAsset?.contractId !== vaultToken.contractId;
 
   const refreshQuote = useCallback(async () => {
     if (!inputAsset || !amount || !vaultToken.contractId) {
       prevExpectedOutRef.current = null;
+      prevRouteRef.current = null;
+      latestRouteRef.current = null;
       setExpectedOut(null);
       setQuotePath("");
       setQuoteData(null);
@@ -125,6 +132,8 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     try {
       if (!needsSwap) {
         prevExpectedOutRef.current = expectedOut;
+        prevRouteRef.current = latestRouteRef.current;
+        latestRouteRef.current = null;
         setExpectedOut(stroops);
         setQuotePath(`${inputAsset.symbol} (no swap)`);
         setQuoteSource("direct");
@@ -139,6 +148,8 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
           slippageTolerance: slippageTolerance / 100,
         });
         prevExpectedOutRef.current = expectedOut;
+        prevRouteRef.current = latestRouteRef.current;
+        latestRouteRef.current = q.path.map((h) => h.contractId);
         setExpectedOut(BigInt(q.expectedAmountOutStroops));
         setQuotePath(q.path.map((h) => h.label ?? h.contractId.slice(0, 6)).join(" → "));
         setQuoteSource(q.source);
@@ -146,6 +157,8 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
       }
     } catch (e) {
       prevExpectedOutRef.current = null;
+      prevRouteRef.current = null;
+      latestRouteRef.current = null;
       setExpectedOut(null);
       setError(e instanceof Error ? e.message : "Could not load quote");
       setQuoteData(null);
@@ -185,6 +198,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
       expectedOut,
       minOut: minOutVal,
       prevExpectedOut: prevExpectedOutRef.current ?? undefined,
+      prevRoute: prevRouteRef.current ?? undefined,
       isFallback,
       isStale,
       source: quoteData.source,
