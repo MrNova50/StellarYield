@@ -566,6 +566,33 @@ model ReconciliationAnomaly {
   @@index([assetId, createdAt])
 }
 
+// ── Daily Portfolio Snapshot Models (Daily Movement Comparison) ──────────────
+
+model DailyPortfolioSnapshot {
+  id                  String   @id @default(uuid())
+  walletAddress       String
+  snapshotDate        DateTime // UTC date (normalized to start of day)
+  
+  // Portfolio totals at snapshot time
+  totalValueUsd       Float
+  totalDepositedUsd   Float    // Cumulative amount deposited
+  totalWithdrawnUsd   Float    // Cumulative amount withdrawn
+  
+  // Per-asset snapshot
+  assetBreakdown      Json     // { [asset]: { valueUsd: number, quantity: number } }
+  protocolBreakdown   Json     // { [protocol]: { valueUsd: number } }
+  
+  // Daily movement (calculated from previous day)
+  previousSnapshotId  String?  // ID of previous day's snapshot for reference
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([walletAddress, snapshotDate]) // One snapshot per wallet per day
+  @@index([walletAddress, snapshotDate])
+  @@index([walletAddress, createdAt])
+}
+
 // ── Indexer Continuity Models (Issue #891) ──────────────────────────────────
 
 model IndexerGapEvent {
