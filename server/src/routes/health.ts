@@ -890,5 +890,100 @@ router.post("/keepers/heartbeat", async (req: Request, res: Response) => {
   res.status(200).json({ status: "ok", worker, timestamp: new Date().toISOString() });
 });
 
+// ── Weekly Report Generation Health Check ─────────────────────────────────
+
+import {
+  getWeeklyReportHealth,
+  getPeriodsNeedingCatchUp,
+  WeeklyReportHealthCheck,
+} from "../services/weeklyYieldReportService";
+
+export interface WeeklyReportsHealthResponse {
+  status: "healthy" | "degraded" | "unhealthy";
+  reportType: string;
+  currentPeriod: WeeklyReportHealthCheck["currentPeriod"];
+  previousPeriods: WeeklyReportHealthCheck["previousPeriods"];
+  summary: WeeklyReportHealthCheck["summary"];
+  catchUpPeriods: Array<{ periodStart: string; periodEnd: string; status: string }>;
+  timestamp: string;
+}
+
+/**
+ * GET /health/weekly-reports
+ *
+ * Returns health status for weekly report generation, distinguishing between:
+ * - SUCCESS: Generated on time
+ * - DELAYED: Generated but after expected time
+ * - MISSING: No generation occurred for the window
+ * - FAILED: Generation was attempted but errored out
+ *
+ * Also identifies periods needing catch-up generation.
+ */
+router.get("/weekly-reports", async (_req: Request, res: Response) => {
+  try {
+    const health = await getWeeklyReportHealth("weekly-yield-report", 4);
+    const catchUpPeriods = await getPeriodsNeedingCatchUp("weekly-yield-report", 4);
+
+    let overallStatus: WeeklyReportsHealthResponse["status"] = "healthy";
+    if (health.summary.failed > 0 || health.summary.missing > 0) {
+      overallStatus = "unhealthy";
+    } else if (health.summary.delayed > 0) {
+      overallStatus = "degraded";
+    }
+
+    const response: WeeklyReportsHealthResponse = {
+      status: overallStatus,
+      reportType: health.reportType,
+      currentPeriod: health.currentPeriod,
+      previousPeriods: health.previousPeriods,
+      summary: health.summary,
+      catchUpPeriods: catchUpPeriods.map((p) => ({
+        periodStart: p.periodStart.toISOString().split("T")[0],
+        periodEnd: p.periodEnd.toISOString().split("T")[0],
+        status: p.status,
+      })),
+      timestamp: new Date().toISOString(),
+    };
+
+    const statusCode = overallStatus === "unhealthy" ? 503 : overallStatus === "degraded" ? 200 : 200;
+    res.status(statusCode).json(response);
+  } catch (error) {
+    console.error("Weekly reports health check failed:", error);
+    res.status(500).json({
+      status: "error",
+      error: error instanceof Error ? error.message : "Health check failed",
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+/**
+ * POST /health/weekly-reports/catch-up
+ *
+ * Manually trigger catch-up generation for missed periods.
+ */
+router.post("/weekly-reports/catch-up", async (req: Request, res: Response) => {
+  try {
+    const { maxPeriods = 4 } = req.body ?? {};
+    const { generateCatchUpReports } = await import("../services/weeklyYieldReportService");
+
+    const results = await generateCatchUpReports("weekly-yield-report", maxPeriods);
+
+    res.json({
+      success: true,
+      triggeredAt: new Date().toISOString(),
+      maxPeriods,
+      results,
+    });
+  } catch (error) {
+    console.error("Catch-up generation failed:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Catch-up generation failed",
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 export default router;
 
