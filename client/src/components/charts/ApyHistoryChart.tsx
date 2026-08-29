@@ -198,9 +198,18 @@ function CustomTooltip({ active, payload, label, sourceHealth }: CustomTooltipPr
   );
 }
 
+interface PredictionPoint {
+  date: string;
+  predictedApy: number;
+  lowerApy: number;
+  upperApy: number;
+  confidence?: number;
+}
+
 export default function ApyHistoryChart() {
   const [range, setRange] = useState<TimeRange>("1M");
   const [history, setHistory] = useState<HistoricalApyPoint[]>([]);
+  const [predictions, setPredictions] = useState<PredictionPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -219,18 +228,27 @@ export default function ApyHistoryChart() {
       }
 
       const raw = await response.json();
-      const rows = Array.isArray(raw) ? raw : [];
+      const rows = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.historical)
+          ? raw.historical
+          : [];
+      const predRows = Array.isArray(raw?.predictions)
+        ? (raw.predictions as PredictionPoint[])
+        : [];
       const now = Date.now();
-      const normalized = rows
-        .map((row) => normalizeHistoryPoint(row as ApiHistoryPoint, now))
-        .filter((point): point is HistoricalApyPoint => point !== null)
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      const normalized = (rows as unknown[])
+        .map((row: unknown) => normalizeHistoryPoint(row as ApiHistoryPoint, now))
+        .filter((point: HistoricalApyPoint | null): point is HistoricalApyPoint => point !== null)
+        .sort((a: HistoricalApyPoint, b: HistoricalApyPoint) => new Date(a.date).getTime() - new Date(b.date).getTime());
       setHistory(normalized);
+      setPredictions(predRows);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Unable to load APY history";
       setError(message);
       setHistory((prev) => (prev.length > 0 ? prev : []));
+      setPredictions([]);
     } finally {
       setLoading(false);
       setRetrying(false);
@@ -257,13 +275,22 @@ export default function ApyHistoryChart() {
     [filteredHistory],
   );
 
+  const combinedData = useMemo(() => {
+    if (predictions.length === 0) return filteredHistory;
+    return [...filteredHistory, ...predictions];
+  }, [filteredHistory, predictions]);
+
   return (
     <div className="glass-card mt-8 p-6">
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h3 className="text-xl font-bold text-white">APY History</h3>
+          <h3 className="text-xl font-bold text-white">
+            {predictions.length > 0 ? "APY Forecast" : "APY History"}
+          </h3>
           <p className="mt-1 text-sm text-gray-400">
-            Review recent yield changes before committing to a vault.
+            {predictions.length > 0
+              ? "Review historical yields alongside forecast confidence bands reflecting market uncertainty."
+              : "Review recent yield changes before committing to a vault."}
           </p>
         </div>
 
@@ -318,14 +345,14 @@ export default function ApyHistoryChart() {
         {loading ? (
           <div className="h-full w-full rounded-lg border border-white/10 bg-white/[0.02] p-5">
             <p className="text-sm text-gray-400 mb-3" role="status">
-              Loading APY history...
+              Loading APY history / Loading APY forecast...
             </p>
             <div className="h-full w-full animate-pulse bg-gradient-to-r from-gray-700/30 via-gray-600/30 to-gray-700/30 rounded-lg" />
           </div>
-        ) : error && history.length === 0 ? (
+        ) : error && history.length === 0 && predictions.length === 0 ? (
           <div className="h-full w-full rounded-lg border border-red-500/30 bg-red-500/10 px-6 py-8 flex flex-col items-center justify-center text-center">
             <AlertTriangle size={24} className="text-red-300 mb-3" />
-            <p className="text-red-100 font-semibold">Unable to load APY history</p>
+            <p className="text-red-100 font-semibold">Unable to load APY history / Unable to load APY forecast</p>
             <p className="text-red-200/90 text-sm mt-1 max-w-sm">{error}</p>
             <button
               type="button"
@@ -339,7 +366,7 @@ export default function ApyHistoryChart() {
               Retry
             </button>
           </div>
-        ) : sourceHealth.allStale && filteredHistory.length > 0 ? (
+        ) : sourceHealth.allStale && filteredHistory.length > 0 && predictions.length === 0 ? (
           /* All-stale empty state (#1005) */
           <div
             className="h-full w-full rounded-lg border border-amber-500/30 bg-amber-500/10 px-6 py-8 flex flex-col items-center justify-center text-center"
@@ -351,7 +378,7 @@ export default function ApyHistoryChart() {
               Source data has not been refreshed within the expected window. Chart may not reflect current market conditions.
             </p>
           </div>
-        ) : filteredHistory.length === 0 ? (
+        ) : filteredHistory.length === 0 && predictions.length === 0 ? (
           <div className="h-full w-full rounded-lg border border-white/10 bg-white/[0.02] px-6 py-8 flex flex-col items-center justify-center text-center">
             <p className="text-gray-300 font-semibold">No APY history points available</p>
             <p className="text-gray-500 text-sm mt-1">
@@ -361,7 +388,7 @@ export default function ApyHistoryChart() {
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
-              data={filteredHistory}
+              data={combinedData}
               margin={{ top: 12, right: 12, left: -16, bottom: 0 }}
             >
               <CartesianGrid
@@ -437,6 +464,34 @@ export default function ApyHistoryChart() {
                   fill: "#6C5DD3",
                 }}
               />
+              {predictions.length > 0 && (
+                <>
+                  <Line
+                    type="monotone"
+                    dataKey="predictedApy"
+                    stroke="#A78BFA"
+                    strokeWidth={2}
+                    strokeDasharray="3 3"
+                    dot={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="lowerApy"
+                    stroke="rgba(167, 139, 250, 0.4)"
+                    strokeWidth={1}
+                    strokeDasharray="2 2"
+                    dot={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="upperApy"
+                    stroke="rgba(167, 139, 250, 0.4)"
+                    strokeWidth={1}
+                    strokeDasharray="2 2"
+                    dot={false}
+                  />
+                </>
+              )}
             </LineChart>
           </ResponsiveContainer>
         )}

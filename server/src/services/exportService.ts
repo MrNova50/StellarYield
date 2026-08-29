@@ -12,6 +12,7 @@ import {
   computeModelCompleteness,
   ConfidenceFactors
 } from "./confidenceService";
+import { PortfolioService, type VaultPosition } from "./portfolioService";
 
 export interface SnapshotBundle {
   version: string;
@@ -148,6 +149,30 @@ export class ExportService {
         filtersApplied: filters,
       },
     };
+  }
+
+  async exportPortfolio(
+    positions: VaultPosition[],
+    filters: Record<string, any>
+  ): Promise<string> {
+    const filtered = PortfolioService.filterPositionsByAssetClass(positions, filters);
+
+    const headers = ["Protocol", "Asset", "Deposited USD", "Current Value USD", "Asset Class"];
+    const rows = filtered.map(pos => [
+      pos.protocol,
+      pos.asset,
+      pos.depositedUsd.toFixed(2),
+      pos.currentValueUsd.toFixed(2),
+      PortfolioService.getAssetClass(pos.asset)
+    ].map(val => {
+      const s = String(val);
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    }).join(","));
+
+    return [headers.join(","), ...rows].join("\n");
   }
 }
 

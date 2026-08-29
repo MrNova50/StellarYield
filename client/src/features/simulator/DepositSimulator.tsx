@@ -33,20 +33,25 @@ const SEVERITY_STYLES: Record<
   },
 };
 
-function WarningItem({ warning }: { warning: SimulationWarning }) {
-  const styles = SEVERITY_STYLES[warning.severity];
+function WarningItem({ warning }: { warning: SimulationWarning | string }) {
+  const normWarning: SimulationWarning = typeof warning === "string"
+    ? { code: "UNSUPPORTED_STRATEGY", severity: "warning", message: warning, remediation: "Adjust inputs or check network conditions" }
+    : warning;
+  const styles = SEVERITY_STYLES[normWarning.severity] || SEVERITY_STYLES.warning;
   const { Icon } = styles;
   return (
     <li className={`flex gap-3 p-3 rounded ${styles.container}`} role="alert">
       <Icon size={16} className={`${styles.icon} shrink-0 mt-0.5`} aria-hidden="true" />
       <div className="space-y-0.5 text-sm">
-        <p className={`font-medium ${styles.text}`}>{warning.message}</p>
-        <p className="text-gray-400 text-xs">
-          <span className="font-semibold text-gray-300">Suggestion: </span>
-          {warning.remediation}
-        </p>
-        {warning.affectedField && (
-          <p className="text-gray-500 text-xs font-mono">Field: {warning.affectedField}</p>
+        <p className={`font-medium ${styles.text}`}>{normWarning.message}</p>
+        {normWarning.remediation && (
+          <p className="text-gray-400 text-xs">
+            <span className="font-semibold text-gray-300">Suggestion: </span>
+            {normWarning.remediation}
+          </p>
+        )}
+        {normWarning.affectedField && (
+          <p className="text-gray-500 text-xs font-mono">Field: {normWarning.affectedField}</p>
         )}
       </div>
     </li>
@@ -101,20 +106,24 @@ export const DepositSimulator: React.FC<DepositSimulatorProps> = ({
 
       <h3 className="text-xl font-bold mb-4 text-gray-800">Deposit Simulation</h3>
 
-      {criticalWarnings.length > 0 && (
-        <ul className="mb-4 space-y-2" aria-label="Critical warnings">
-          {criticalWarnings.map((w, idx) => (
-            <WarningItem key={idx} warning={w} />
-          ))}
-        </ul>
-      )}
-
-      {otherWarnings.length > 0 && (
-        <ul className="mb-4 space-y-2" aria-label="Simulation warnings">
-          {otherWarnings.map((w, idx) => (
-            <WarningItem key={idx} warning={w} />
-          ))}
-        </ul>
+      {(criticalWarnings.length > 0 || otherWarnings.length > 0) && (
+        <div className="mb-4">
+          <h4 className="font-semibold text-gray-700 mb-2">Warnings</h4>
+          {criticalWarnings.length > 0 && (
+            <ul className="space-y-2 mb-2" aria-label="Critical warnings">
+              {criticalWarnings.map((w, idx) => (
+                <WarningItem key={idx} warning={w} />
+              ))}
+            </ul>
+          )}
+          {otherWarnings.length > 0 && (
+            <ul className="space-y-2" aria-label="Simulation warnings">
+              {otherWarnings.map((w, idx) => (
+                <WarningItem key={idx} warning={w} />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <div className="grid grid-cols-2 gap-4 mb-6">

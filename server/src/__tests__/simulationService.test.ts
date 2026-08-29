@@ -5,6 +5,7 @@ import {
   type SimulatorFixture,
 } from "../../../shared/test-fixtures/simulatorFixtures";
 import {
+  simulateDeposit,
   simulateRebalance,
   validateRebalanceParams,
   REBALANCE_THRESHOLDS,
