@@ -70,36 +70,59 @@ export const DepositSimulator: React.FC<DepositSimulatorProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Consistency checks: track latest requested amount to discard stale / out-of-order responses (#1180)
+  const latestAmountRef = React.useRef(amount);
+  latestAmountRef.current = amount;
+  const requestIdRef = React.useRef(0);
+
   useEffect(() => {
     const controller = new AbortController();
-    const load = async () => {
-      if (!amount || amount <= 0) {
-        if (!controller.signal.aborted) setSimulation(null);
-        return;
-      }
-      if (!controller.signal.aborted) {
-        setLoading(true);
-        setError(null);
-      }
+    const currentRequestId = ++requestIdRef.current;
+    const targetAmount = amount;
+
+    if (!targetAmount || targetAmount <= 0) {
+      setLoading(false);
+      setError(null);
+      setSimulation(null);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    // Debounce rapid manual edits
+    const debounceTimer = setTimeout(async () => {
       try {
         const result = await fetchDepositSimulation(
-          { strategyId, amount, token },
+          { strategyId, amount: targetAmount, token },
           { signal: controller.signal }
         );
-        if (!controller.signal.aborted) setSimulation(result);
+
+        // Discard stale responses if amount has changed or newer request started
+        if (
+          !controller.signal.aborted &&
+          currentRequestId === requestIdRef.current &&
+          targetAmount === latestAmountRef.current
+        ) {
+          setSimulation(result);
+          setLoading(false);
+        }
       } catch (err) {
         if (isSimulationCancellation(err) || controller.signal.aborted) {
           return;
         }
-        if (!controller.signal.aborted) {
+        if (
+          currentRequestId === requestIdRef.current &&
+          targetAmount === latestAmountRef.current
+        ) {
           setError(err instanceof Error ? err.message : "Error running simulation");
+          setLoading(false);
         }
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
       }
-    };
-    void load();
+    }, 150);
+
     return () => {
+      clearTimeout(debounceTimer);
       controller.abort();
     };
   }, [strategyId, amount, token]);
