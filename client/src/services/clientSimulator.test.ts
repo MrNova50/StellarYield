@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { simulateDeposit as clientSimulate } from "../services/clientSimulator";
+import { simulateDeposit as clientSimulate } from "./clientSimulator";
 import {
   SIMULATOR_FIXTURES,
   SIMULATOR_EDGE_CASES,
