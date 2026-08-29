@@ -212,12 +212,17 @@ export function predictApy(
 
     const roundConf = Math.round(confidence * 100) / 100;
     const bandWidth = Math.max(0.2, (1 - roundConf) * 2 + day * 0.15 + volatilityPct * 0.2);
-    const lowerApy = Math.max(0, Math.round((predictedApy - bandWidth / 2) * 100) / 100);
-    const upperApy = Math.round((predictedApy + bandWidth / 2) * 100) / 100;
+    // Round APY figures to 6 decimals, not 2 (#1070) — a fixed 2-decimal
+    // round collapses sub-basis-point predicted rates (e.g. 0.003%) to
+    // 0.00, which then can't be distinguished from "no yield" downstream.
+    // Display formatting (client/src/lib/apyFormat.ts) handles how many
+    // of these digits are actually shown for a given magnitude.
+    const lowerApy = Math.max(0, Math.round((predictedApy - bandWidth / 2) * 1e6) / 1e6);
+    const upperApy = Math.round((predictedApy + bandWidth / 2) * 1e6) / 1e6;
 
     predictions.push({
       date: futureDate.toISOString().split("T")[0],
-      predictedApy: Math.round(predictedApy * 100) / 100,
+      predictedApy: Math.round(predictedApy * 1e6) / 1e6,
       confidence: roundConf,
       lowerApy,
       upperApy,
@@ -254,8 +259,8 @@ function generateFlatPredictions(apy: number, days: number, volatilityPct: numbe
       date: d.toISOString().split("T")[0],
       predictedApy: apy,
       confidence: 0.3,
-      lowerApy: Math.max(0, Math.round((apy - bandWidth / 2) * 100) / 100),
-      upperApy: Math.round((apy + bandWidth / 2) * 100) / 100,
+      lowerApy: Math.max(0, Math.round((apy - bandWidth / 2) * 1e6) / 1e6),
+      upperApy: Math.round((apy + bandWidth / 2) * 1e6) / 1e6,
     });
   }
   return predictions;

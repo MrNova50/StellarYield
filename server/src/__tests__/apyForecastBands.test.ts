@@ -200,6 +200,79 @@ describe("ema", () => {
   });
 });
 
+// ── Precision at extreme magnitudes (#1070) ────────────────────────────────
+
+function makeFlatHistory(baseApy: number, days = 14) {
+  // No noise — keeps every value in the target magnitude band, so these
+  // tests actually exercise tiny/huge precision rather than sine noise
+  // dominating the signal.
+  const now = new Date();
+  return Array.from({ length: days }, (_, i) => {
+    const date = new Date(now);
+    date.setDate(now.getDate() - (days - i));
+    return {
+      date: date.toISOString().split("T")[0],
+      apy: baseApy,
+      tvl: 1_000_000,
+    };
+  });
+}
+
+describe("predictApy precision at extreme magnitudes", () => {
+  it("does not round a sub-basis-point predicted APY to zero", () => {
+    const result = predictApy("TinyYield", makeFlatHistory(0.00005, 14), 7);
+    for (const point of result.predictions) {
+      expect(point.predictedApy).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps a sub-basis-point forecast band non-degenerate", () => {
+    const result = predictApy("TinyYield", makeFlatHistory(0.00005, 14), 7);
+    for (const point of result.predictions) {
+      expect(point.lowerApy).toBeLessThanOrEqual(point.predictedApy);
+      expect(point.upperApy).toBeGreaterThanOrEqual(point.predictedApy);
+    }
+  });
+
+  it("handles a very large synthetic APY without overflow or NaN", () => {
+    const result = predictApy("StressTest", makeFlatHistory(500_000, 14), 7);
+    for (const point of result.predictions) {
+      expect(Number.isFinite(point.predictedApy)).toBe(true);
+      expect(Number.isFinite(point.lowerApy)).toBe(true);
+      expect(Number.isFinite(point.upperApy)).toBe(true);
+      expect(Number.isNaN(point.predictedApy)).toBe(false);
+    }
+  });
+
+  it("handles an extreme billions-scale synthetic APY without overflow", () => {
+    const result = predictApy("ExtremeStress", makeFlatHistory(9_000_000_000, 14), 7);
+    for (const point of result.predictions) {
+      expect(Number.isFinite(point.predictedApy)).toBe(true);
+      expect(point.predictedApy).toBeGreaterThan(0);
+    }
+  });
+
+  it("distinguishes two different tiny predicted APYs instead of both flattening to zero", () => {
+    const a = predictApy("TinyA", makeFlatHistory(0.00002, 14), 7);
+    const b = predictApy("TinyB", makeFlatHistory(0.00008, 14), 7);
+
+    expect(a.predictions[0].predictedApy).not.toBe(b.predictions[0].predictedApy);
+    expect(a.predictions[0].predictedApy).toBeGreaterThan(0);
+    expect(b.predictions[0].predictedApy).toBeGreaterThan(0);
+  });
+
+  it("falls back gracefully for tiny APY with insufficient history (<3 points)", () => {
+    const shortHistory = [
+      { date: "2026-05-01", apy: 0.00003 },
+      { date: "2026-05-02", apy: 0.00004 },
+    ];
+    const result = predictApy("TinyShort", shortHistory, 7);
+    for (const point of result.predictions) {
+      expect(Number.isFinite(point.predictedApy)).toBe(true);
+    }
+  });
+});
+
 describe("linearRegression", () => {
   it("returns slope=0 and intercept=mean for constant data", () => {
     const { slope, intercept } = linearRegression([5, 5, 5, 5, 5]);

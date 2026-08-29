@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { apiUrl } from "../../lib/api";
 import { computeDecayedFreshnessConfidence } from "../dashboard/freshnessDecay";
+import { formatApy } from "../../lib/apyFormat";
 
 type TimeRange = "1W" | "1M" | "All";
 
@@ -155,7 +156,7 @@ function CustomTooltip({ active, payload, label, sourceHealth }: CustomTooltipPr
     >
       <p style={{ color: "#94a3b8", fontSize: 12, marginBottom: 6 }}>{dateLabel}</p>
       <p style={{ color: "#6C5DD3", fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
-        {apy.toFixed(2)}% APY
+        {formatApy(apy)} APY
       </p>
       {isStale ? (
         <p style={{ color: "#f87171", fontSize: 11 }}>
@@ -389,7 +390,7 @@ export default function ApyHistoryChart() {
               />
               <YAxis
                 domain={["dataMin - 0.4", "dataMax + 0.4"]}
-                tickFormatter={(value) => `${value.toFixed(1)}%`}
+                tickFormatter={(value) => formatApy(value)}
                 stroke="#94a3b8"
                 tick={{ fill: "#94a3b8", fontSize: 12 }}
                 axisLine={false}
