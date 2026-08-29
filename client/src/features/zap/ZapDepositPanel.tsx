@@ -30,6 +30,7 @@ import { resolveSlippage } from "../settings/types";
 import DepositRouteMaterialImpactWarning from "./DepositRouteMaterialImpactWarning";
 import { useDepositImpact } from "./useDepositImpact";
 import type { QuoteSnapshot } from "./useDepositImpact";
+import { getVaultSlippage, setVaultSlippage, resetVaultSlippage } from "../../lib/preferences";
 
 export interface ZapDepositPanelProps {
   walletAddress: string | null;
@@ -95,7 +96,18 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const [quotePath, setQuotePath] = useState<string>("");
   const [quoteSource, setQuoteSource] = useState<string>("");
   const [quoteData, setQuoteData] = useState<ZapQuoteResponse | null>(null);
-  const [slippageTolerance, setSlippageTolerance] = useState(settingsSlippage);
+  const [slippageTolerance, setSlippageTolerance] = useState(() =>
+    getVaultSlippage(vaultContractId, settingsSlippage)
+  );
+
+  useEffect(() => {
+    if (vaultContractId) {
+      setSlippageTolerance(getVaultSlippage(vaultContractId, settingsSlippage));
+    } else {
+      setSlippageTolerance(settingsSlippage);
+    }
+  }, [vaultContractId, settingsSlippage]);
+
   const [showSlippageEdit, setShowSlippageEdit] = useState(false);
   const prevExpectedOutRef = useRef<bigint | null>(null);
   // Tracks the most recently fetched route, independent of React state, so a
@@ -259,7 +271,17 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
   const handleSlippageChange = useCallback((value: number) => {
     const clamped = Math.min(MAX_SLIPPAGE, Math.max(MIN_SLIPPAGE, value));
     setSlippageTolerance(clamped);
-  }, []);
+    if (vaultContractId) {
+      setVaultSlippage(vaultContractId, clamped);
+    }
+  }, [vaultContractId]);
+
+  const handleResetSlippage = useCallback(() => {
+    if (vaultContractId) {
+      resetVaultSlippage(vaultContractId);
+      setSlippageTolerance(settingsSlippage);
+    }
+  }, [vaultContractId, settingsSlippage]);
 
   const handleZap = useCallback(async () => {
     if (!walletAddress || !inputAsset || !vaultContractId || !vaultToken.contractId) return;
@@ -520,7 +542,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
 
           {showSlippageEdit && (
             <div className="space-y-2">
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap items-center">
                 {[0.1, 0.5, 1, 2, 3, 5].map((val) => (
                   <button
                     key={val}
@@ -535,6 +557,13 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
                     {val}%
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={handleResetSlippage}
+                  className="text-xs px-2 py-1 rounded bg-white/5 text-gray-400 hover:bg-white/10 border border-white/10 ml-auto"
+                >
+                  Reset
+                </button>
               </div>
               <div className="flex items-center gap-2">
                 <input

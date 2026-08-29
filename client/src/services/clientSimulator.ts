@@ -11,9 +11,8 @@ interface ProtocolDef {
   baseApyBps: number;
 }
 const PROTOCOLS: ProtocolDef[] = [
-  { protocolName: "Blend", protocolType: "blend", baseApyBps: 500 },
-  { protocolName: "Soroswap", protocolType: "amm", baseApyBps: 300 },
-  { protocolName: "DeFindex", protocolType: "index", baseApyBps: 400 },
+  { protocolName: "Blend", protocolType: "blend", baseApyBps: 645 },
+  { protocolName: "Soroswap", protocolType: "soroswap", baseApyBps: 1120 },
 ];
 export interface SimulationParams {
   strategyId: string;

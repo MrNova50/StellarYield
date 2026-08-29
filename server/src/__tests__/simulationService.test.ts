@@ -59,7 +59,7 @@ describe("Simulation Service", () => {
       token: "USDC",
     });
 
-    expect(result0.warnings.some((w) => w.includes("greater than zero"))).toBe(true);
+    expect(result0.warnings.some((w) => w.message.includes("greater than zero"))).toBe(true);
     expect(result0.warnings.some((w: SimulationWarning) => w.code === "ZERO_AMOUNT")).toBe(true);
   });
 });
@@ -263,7 +263,7 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings.some((w) => w.includes("greater than zero"))).toBe(true);
+      expect(result.warnings.some((w) => w.message.includes("greater than zero"))).toBe(true);
       const w = result.warnings.find((w: SimulationWarning) => w.code === "ZERO_AMOUNT");
       expect(w).toBeDefined();
       expect(w!.severity).toBe("critical");
@@ -276,7 +276,7 @@ describe("Simulation Service - Shared Fixture Tests", () => {
         token: "USDC",
       });
 
-      expect(result.warnings.some((w) => w.includes("greater than zero"))).toBe(true);
+      expect(result.warnings.some((w) => w.message.includes("greater than zero"))).toBe(true);
       const w = result.warnings.find((w: SimulationWarning) => w.code === "ZERO_AMOUNT");
       expect(w).toBeDefined();
     });
