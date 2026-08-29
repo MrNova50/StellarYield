@@ -7,12 +7,23 @@ import {
   type ConcentrationWarning,
 } from "../../../shared/types/exposureConcentration";
 import { readConcentrationThresholdOverrides } from "../config/concentrationThresholds";
+import {
+  computeFreshnessStatus,
+  type FreshnessResult,
+} from "./sourceHealthService";
 
 export interface VaultPosition {
   protocol: string;
   asset: string;
   depositedUsd: number;
   currentValueUsd: number;
+  /** ISO-8601 timestamp of when this position's source data was last fetched (#1107). */
+  fetchedAt?: string | null;
+}
+
+/** A holding with its source-freshness metadata attached (#1107). */
+export interface HoldingWithFreshness extends VaultPosition {
+  freshness: FreshnessResult;
 }
 
 export interface ExposureMap {
@@ -93,6 +104,57 @@ export class PortfolioService {
     return mapping[protocol] || "Other";
   }
 
+  /**
+   * Attaches source-freshness metadata to each holding (#1107), so
+   * consumers (portfolio views, exports) can render a consistent
+   * fresh/stale/unknown badge per row.
+   */
+  public static attachFreshness(
+    positions: VaultPosition[],
+    now: Date = new Date(),
+  ): HoldingWithFreshness[] {
+    return positions.map((position) => ({
+      ...position,
+      freshness: computeFreshnessStatus(position.fetchedAt, now),
+    }));
+  }
+
+  /**
+   * Renders holdings (with freshness already attached) as a CSV string,
+   * preserving the same freshness state shown in the UI (#1107) so an
+   * exported report never silently drops that context.
+   */
+  public static holdingsToCsv(holdings: HoldingWithFreshness[]): string {
+    const headers = [
+      "Protocol",
+      "Asset",
+      "Deposited (USD)",
+      "Current Value (USD)",
+      "Source Freshness",
+      "Last Updated",
+    ];
+    const rows = holdings.map((holding) =>
+      [
+        holding.protocol,
+        holding.asset,
+        holding.depositedUsd.toFixed(2),
+        holding.currentValueUsd.toFixed(2),
+        holding.freshness.status,
+        holding.freshness.fetchedAt ?? "unknown",
+      ]
+        .map(escapeCsvField)
+        .join(","),
+    );
+    return [headers.join(","), ...rows].join("\n");
+  }
+}
+
+/** Escape a CSV field: quote and double-up inner quotes if it contains a comma, quote, or newline. */
+function escapeCsvField(value: string): string {
+  if (/[",\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
   public static readonly SUPPORTED_ASSET_CLASSES = ["stablecoin", "crypto"];
 
   public static getAssetClass(asset: string): string {
