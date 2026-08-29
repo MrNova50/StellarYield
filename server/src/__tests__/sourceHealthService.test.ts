@@ -86,4 +86,16 @@ describe("computeFreshnessStatus", () => {
     const result = computeFreshnessStatus(fetchedAt);
     expect(result.status).toBe("fresh");
   });
-});
+
+  it("marks status as exhausted when retry budget is exhausted", () => {
+    const fetchedAt = new Date(NOW.getTime() - 60_000).toISOString();
+    const result = computeFreshnessStatus(
+      fetchedAt,
+      NOW,
+      DEFAULT_FRESHNESS_THRESHOLDS,
+      undefined,
+      true,
+    );
+    expect(result.status).toBe("exhausted");
+  });
+});
