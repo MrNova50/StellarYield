@@ -239,7 +239,7 @@ export function predictApy(
 
     predictions.push({
       date: futureDate.toISOString().split("T")[0],
-      predictedApy: Math.round(predictedApy * 100) / 100,
+      predictedApy: Math.round(predictedApy * 1e6) / 1e6,
       confidence: roundConf,
       lowerApy,
       upperApy,
@@ -279,8 +279,8 @@ function generateFlatPredictions(apy: number, days: number, volatilityPct: numbe
       date: d.toISOString().split("T")[0],
       predictedApy: apy,
       confidence: 0.3,
-      lowerApy: Math.max(0, Math.round((apy - bandWidth / 2) * 100) / 100),
-      upperApy: Math.round((apy + bandWidth / 2) * 100) / 100,
+      lowerApy: Math.max(0, Math.round((apy - bandWidth / 2) * 1e6) / 1e6),
+      upperApy: Math.round((apy + bandWidth / 2) * 1e6) / 1e6,
     });
   }
   return predictions;
