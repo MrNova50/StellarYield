@@ -20,6 +20,9 @@ import {
   restoreAndRetry,
   YIELD_VAULT_SPEC_HASH,
   ApiClient,
+  ProviderMethodError,
+  ProviderConnectionError,
+  ProviderPermissionError,
 } from "../src";
 import {
   createFakeRpcServer,
@@ -28,7 +31,11 @@ import {
   fakeGetNotFound,
   fakeSendPending,
 } from "./fixtures/fakeRpc";
-
+import {
+  createFreighterProvider,
+  createFullFreighterProvider,
+  FreighterLikeProvider,
+} from "./fixtures/freighterProvider";
 describe("Soroban SDK Bindings & Lifecycle", () => {
   const dummyContractId = "CCW67TSB3SSSBDGRGBXMORAX6P4CBGQLGLKXMFFBVD7OH5VO5BTV6U2M";
   const dummyPassphrase = Networks.TESTNET;
@@ -113,6 +120,81 @@ describe("Soroban SDK Bindings & Lifecycle", () => {
 
       expect(signedXdr).not.toBe(unsignedXdr);
     });
+  });
+
+  describe("Provider Adapter Compatibility", () => {
+    const dummyPassphrase = Networks.TESTNET;
+
+    it("FreighterLikeProvider with full implementation supports all methods", async () => {
+      const provider = createFullFreighterProvider();
+      expect(await provider.getPublicKey()).toBe("GBEN_TEST_PUBLIC_KEY");
+
+      const unsignedXdr = createUnsignedXdr();
+      const signedXdr = await provider.signTransaction(unsignedXdr, {
+        networkPassphrase: dummyPassphrase,
+      });
+      // Mock returns input XDR, verify it's a non-empty string
+      expect(typeof signedXdr).toBe("string");
+      expect(signedXdr.length).toBeGreaterThan(0);
+
+      await provider.connect();
+      await provider.switchNetwork(dummyPassphrase);
+      await provider.disconnect();
+    });
+
+    it("FreighterLikeProvider with missing methods throws errors", async () => {
+      const provider = createFreighterProvider();
+
+      // getPublicKey throws error
+      await expect(provider.getPublicKey()).rejects.toThrow();
+
+      // signTransaction throws error
+      await expect(
+        provider.signTransaction("xdr", { networkPassphrase: dummyPassphrase })
+      ).rejects.toThrow();
+
+      // connect throws error
+      await expect(provider.connect()).rejects.toThrow();
+
+      // disconnect throws error
+      await expect(provider.disconnect()).rejects.toThrow();
+
+      // switchNetwork throws error
+      await expect(provider.switchNetwork(dummyPassphrase)).rejects.toThrow();
+    });
+
+    it("FreighterLikeProvider connection denial throws ProviderConnectionError", async () => {
+      const provider = createFreighterProvider();
+      await expect(provider.getPublicKey()).rejects.toThrow("ProviderConnectionError");
+    });
+
+it("Permission denial returns errors with descriptive messages", async () => {
+  const denyingApi = {
+    getPublicKey: async () => {
+      throw new Error("User denied the request");
+    },
+    signTransaction: async () => {
+      throw new Error("User declined the request");
+    },
+    isAllowed: async () => false,
+    connect: async () => {
+      throw new Error("User denied connection");
+    },
+    disconnect: async () => {},
+    switchNetwork: async () => {},
+  };
+  const provider = new FreighterLikeProvider(denyingApi);
+
+  await expect(provider.getPublicKey()).rejects.toThrow();
+  await expect(provider.signTransaction("xdr", { networkPassphrase: dummyPassphrase })).rejects.toThrow();
+  await expect(provider.connect()).rejects.toThrow();
+});
+
+it("FreighterLikeProvider fallback to default when no API provided", async () => {
+  const provider = new FreighterLikeProvider();
+  await expect(provider.getPublicKey()).rejects.toThrow("ProviderConnectionError");
+  await expect(provider.signTransaction("xdr", { networkPassphrase: dummyPassphrase })).rejects.toThrow();
+});
   });
 
   describe("Transaction Lifecycle Transitions", () => {

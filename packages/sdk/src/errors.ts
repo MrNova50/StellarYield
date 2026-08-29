@@ -183,6 +183,50 @@ export class ApiCancelledError extends SorobanSdkError {
   }
 }
 
+export class ProviderConnectionError extends SorobanSdkError {
+  constructor(public readonly providerName: string, reason?: string) {
+    super(
+      reason
+        ? `Failed to connect to '${providerName}': ${reason}`
+        : `Failed to connect to '${providerName}'`,
+      "sign",
+      false
+    );
+    this.providerName = providerName;
+  }
+}
+
+export class ProviderMethodError extends SorobanSdkError {
+  constructor(
+    public readonly providerName: string,
+    public readonly method: string,
+    reason?: string
+  ) {
+    super(
+      reason
+        ? `Provider '${providerName}' does not support method '${method}': ${reason}`
+        : `Provider '${providerName}' does not support method '${method}'`,
+      "sign",
+      false
+    );
+    this.providerName = providerName;
+    this.method = method;
+  }
+}
+
+export class ProviderPermissionError extends SorobanSdkError {
+  constructor(public readonly providerName: string, reason?: string) {
+    super(
+      reason
+        ? `Permission denied by '${providerName}': ${reason}`
+        : `Permission denied by '${providerName}'`,
+      "sign",
+      true
+    );
+    this.providerName = providerName;
+  }
+}
+
 /** True when an error represents intentional request cancellation (not a timeout). */
 export function isApiCancellation(error: unknown): boolean {
   if (error instanceof ApiCancelledError) return true;
