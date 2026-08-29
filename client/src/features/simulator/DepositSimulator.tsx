@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { AlertTriangle, AlertCircle, Info } from "lucide-react";
-import { fetchDepositSimulation } from "./simulationService";
+import {
+  fetchDepositSimulation,
+  isSimulationCancellation,
+} from "./simulationService";
 import type { SimulationResult, SimulationWarning } from "./simulationService";
 
 interface DepositSimulatorProps {
@@ -68,27 +71,37 @@ export const DepositSimulator: React.FC<DepositSimulatorProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
     const load = async () => {
       if (!amount || amount <= 0) {
-        if (active) setSimulation(null);
+        if (!controller.signal.aborted) setSimulation(null);
         return;
       }
-      if (active) {
+      if (!controller.signal.aborted) {
         setLoading(true);
         setError(null);
       }
       try {
-        const result = await fetchDepositSimulation({ strategyId, amount, token });
-        if (active) setSimulation(result);
+        const result = await fetchDepositSimulation(
+          { strategyId, amount, token },
+          { signal: controller.signal }
+        );
+        if (!controller.signal.aborted) setSimulation(result);
       } catch (err) {
-        if (active) setError(err instanceof Error ? err.message : "Error running simulation");
+        if (isSimulationCancellation(err) || controller.signal.aborted) {
+          return;
+        }
+        if (!controller.signal.aborted) {
+          setError(err instanceof Error ? err.message : "Error running simulation");
+        }
       } finally {
-        if (active) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
-    load();
-    return () => { active = false; };
+    void load();
+    return () => {
+      controller.abort();
+    };
   }, [strategyId, amount, token]);
 
   if (loading) return <div className="p-4 text-gray-500 animate-pulse">Running simulation...</div>;

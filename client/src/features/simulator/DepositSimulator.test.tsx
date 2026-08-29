@@ -5,9 +5,13 @@ import { vi } from "vitest";
 import { DepositSimulator } from "./DepositSimulator";
 import { fetchDepositSimulation } from "./simulationService";
 
-vi.mock("./simulationService", () => ({
-  fetchDepositSimulation: vi.fn(),
-}));
+vi.mock("./simulationService", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./simulationService")>();
+  return {
+    ...actual,
+    fetchDepositSimulation: vi.fn(),
+  };
+});
 
 const mockFetch = fetchDepositSimulation as any;
 

@@ -6,7 +6,7 @@ import { decodeTransactionError } from "../../utils/errorDecoder";
 import { zapDeposit } from "../../services/soroban";
 import type { TxPhase } from "../../services/transactionPhase";
 import { TX_PHASE_PIPELINE } from "../../services/transactionPhase";
-import { fetchSwapQuote, verifySwapQuote } from "./fetchSwapQuote";
+import { fetchSwapQuote, isQuoteCancellation, verifySwapQuote } from "./fetchSwapQuote";
 import { minAmountAfterSlippage } from "./slippage";
 import {
   buildZapQuoteRequestKey,
@@ -110,6 +110,9 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
 
   const [showSlippageEdit, setShowSlippageEdit] = useState(false);
   const prevExpectedOutRef = useRef<bigint | null>(null);
+  const quoteAbortRef = useRef<AbortController | null>(null);
+  const quoteRequestSeqRef = useRef(0);
+  const [quoteNowMs, setQuoteNowMs] = useState(() => Date.now());
   // Tracks the most recently fetched route, independent of React state, so a
   // route-path change can be detected even when the headline output amount
   // stays nominally the same between fetches.
@@ -154,6 +157,10 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
       return;
     }
 
+    const controller = new AbortController();
+    quoteAbortRef.current?.abort();
+    quoteAbortRef.current = controller;
+
     setQuoteLoading(true);
     setError("");
     const requestSeq = ++quoteRequestSeqRef.current;
@@ -174,15 +181,18 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
         setQuoteSource("direct");
         setQuoteData(null);
       } else {
-        const q = await fetchSwapQuote({
-          inputTokenContract: inputAsset.contractId,
-          vaultTokenContract: vaultToken.contractId,
-          amountInStroops: stroops.toString(),
-          inputDecimals: inputAsset.decimals,
-          vaultDecimals: vaultToken.decimals,
-          slippageTolerance: slippageTolerance / 100,
-        });
-        if (requestSeq !== quoteRequestSeqRef.current) return;
+        const q = await fetchSwapQuote(
+          {
+            inputTokenContract: inputAsset.contractId,
+            vaultTokenContract: vaultToken.contractId,
+            amountInStroops: stroops.toString(),
+            inputDecimals: inputAsset.decimals,
+            vaultDecimals: vaultToken.decimals,
+            slippageTolerance: slippageTolerance / 100,
+          },
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted || requestSeq !== quoteRequestSeqRef.current) return;
         const responseKey = buildZapQuoteRequestKey({
           inputTokenContract: inputAsset.contractId,
           vaultTokenContract: vaultToken.contractId,
@@ -200,7 +210,13 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
         setQuoteNowMs(Date.now());
       }
     } catch (e) {
-      if (requestSeq !== quoteRequestSeqRef.current) return;
+      if (
+        isQuoteCancellation(e) ||
+        controller.signal.aborted ||
+        requestSeq !== quoteRequestSeqRef.current
+      ) {
+        return;
+      }
       prevExpectedOutRef.current = null;
       prevRouteRef.current = null;
       latestRouteRef.current = null;
@@ -208,7 +224,7 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
       setError(e instanceof Error ? e.message : "Could not load quote");
       setQuoteData(null);
     } finally {
-      if (requestSeq === quoteRequestSeqRef.current) {
+      if (!controller.signal.aborted && requestSeq === quoteRequestSeqRef.current) {
         setQuoteLoading(false);
       }
     }
@@ -218,7 +234,10 @@ export default function ZapDepositPanel({ walletAddress }: ZapDepositPanelProps)
     const t = setTimeout(() => {
       void refreshQuote();
     }, 350);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      quoteAbortRef.current?.abort();
+    };
   }, [refreshQuote]);
 
   const minOut = useMemo(() => {
