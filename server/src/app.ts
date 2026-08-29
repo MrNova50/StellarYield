@@ -44,6 +44,7 @@ import treasuryRouter from "./routes/treasury";
 import governanceRouter from "./routes/governance";
 import governanceVoteReceiptsRouter from "./routes/governanceVoteReceipts";
 import activityTimelineRouter from "./routes/activityTimeline";
+import portfolioReconcileRouter from "./routes/portfolioReconcile";
 import presetsRouter from "./routes/presets";
 import analyticsRouter from "./routes/analytics";
 import offrampRouter from "./routes/offramp";
@@ -164,6 +165,7 @@ export function createApp() {
   app.use("/api/governance", governanceRouter);
   app.use("/api/governance", governanceVoteReceiptsRouter);
   app.use("/api/portfolio/activity", activityTimelineRouter);
+  app.use("/api/portfolio/reconcile", portfolioReconcileRouter);
   app.use("/api/presets", presetsRouter);
   app.use("/api/analytics", analyticsRouter);
   app.use("/api/offramp", offrampRouter);
