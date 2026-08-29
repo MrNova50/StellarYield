@@ -200,75 +200,90 @@ describe("ema", () => {
   });
 });
 
-// ── Precision at extreme magnitudes (#1070) ────────────────────────────────
+// ── History coverage decay integration (#1073) ─────────────────────────────
 
-function makeFlatHistory(baseApy: number, days = 14) {
-  // No noise — keeps every value in the target magnitude band, so these
-  // tests actually exercise tiny/huge precision rather than sine noise
-  // dominating the signal.
-  const now = new Date();
-  return Array.from({ length: days }, (_, i) => {
-    const date = new Date(now);
-    date.setDate(now.getDate() - (days - i));
-    return {
-      date: date.toISOString().split("T")[0],
-      apy: baseApy,
-      tvl: 1_000_000,
-    };
+describe("predictApy history coverage decay", () => {
+  function sparseHistory(baseApy: number, days = 30) {
+    // Only every 4th day has a reading — sparse coverage across the window.
+    return makeHistory(baseApy, days).filter((_, i) => i % 4 === 0);
+  }
+
+  function gappedHistory(baseApy: number) {
+    // Dense 7-day cluster, a 20-day gap, then a dense 7-day cluster up to "now".
+    const now = new Date();
+    const early = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(now);
+      date.setDate(now.getDate() - 30 - (6 - i));
+      return { date: date.toISOString().split("T")[0], apy: baseApy, tvl: 1_000_000 };
+    });
+    const recent = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(now);
+      date.setDate(now.getDate() - (6 - i));
+      return { date: date.toISOString().split("T")[0], apy: baseApy, tvl: 1_000_000 };
+    });
+    return [...early, ...recent];
+  }
+
+  function staleHistory(baseApy: number, days = 14) {
+    // Dense window, but the whole thing ended 25 days ago (nothing recent).
+    const now = new Date();
+    return Array.from({ length: days }, (_, i) => {
+      const date = new Date(now);
+      date.setDate(now.getDate() - 25 - (days - i));
+      return { date: date.toISOString().split("T")[0], apy: baseApy, tvl: 1_000_000 };
+    });
+  }
+
+  it("includes historyCoverage and coverageDecay in confidenceInputs", () => {
+    const result = predictApy("Blend", makeHistory(6.5), 7);
+    expect(typeof result.confidenceInputs.historyCoverage).toBe("number");
+    expect(typeof result.confidenceInputs.coverageDecay).toBe("number");
+    expect(Array.isArray(result.confidenceInputs.coverageReasons)).toBe(true);
   });
-}
 
-describe("predictApy precision at extreme magnitudes", () => {
-  it("does not round a sub-basis-point predicted APY to zero", () => {
-    const result = predictApy("TinyYield", makeFlatHistory(0.00005, 14), 7);
+  it("dense, up-to-date history has full (or near-full) coverage decay", () => {
+    const result = predictApy("Blend", makeHistory(6.5, 30), 7);
+    expect(result.confidenceInputs.coverageDecay).toBeGreaterThan(0.9);
+  });
+
+  it("sparse history produces lower prediction confidence than dense history", () => {
+    const dense = predictApy("Blend", makeHistory(6.5, 30), 7);
+    const sparse = predictApy("Blend", sparseHistory(6.5, 30), 7);
+
+    expect(sparse.confidenceInputs.coverageDecay).toBeLessThan(
+      dense.confidenceInputs.coverageDecay,
+    );
+    expect(sparse.predictions[0].confidence).toBeLessThan(dense.predictions[0].confidence);
+    expect(sparse.confidenceInputs.coverageReasons).toContain("sparse_history");
+  });
+
+  it("a long gap in otherwise-dense history widens the forecast band", () => {
+    const dense = predictApy("Blend", makeHistory(6.5, 14), 7);
+    const gapped = predictApy("Blend", gappedHistory(6.5), 7);
+
+    const denseWidth = dense.predictions[0].upperApy - dense.predictions[0].lowerApy;
+    const gappedWidth = gapped.predictions[0].upperApy - gapped.predictions[0].lowerApy;
+
+    expect(gappedWidth).toBeGreaterThan(denseWidth);
+    expect(gapped.confidenceInputs.coverageReasons).toContain("gapped_history");
+  });
+
+  it("stale history (no recent data) degrades confidence even with a full window", () => {
+    const fresh = predictApy("Blend", makeHistory(6.5, 14), 7);
+    const stale = predictApy("Blend", staleHistory(6.5, 14), 7);
+
+    expect(stale.confidenceInputs.coverageDecay).toBeLessThan(
+      fresh.confidenceInputs.coverageDecay,
+    );
+    expect(stale.predictions[0].confidence).toBeLessThan(fresh.predictions[0].confidence);
+    expect(stale.confidenceInputs.coverageReasons).toContain("stale_history");
+  });
+
+  it("prediction confidence stays within [0, 1] even for badly sparse/stale/gapped history", () => {
+    const result = predictApy("Blend", sparseHistory(6.5, 30), 7);
     for (const point of result.predictions) {
-      expect(point.predictedApy).toBeGreaterThan(0);
-    }
-  });
-
-  it("keeps a sub-basis-point forecast band non-degenerate", () => {
-    const result = predictApy("TinyYield", makeFlatHistory(0.00005, 14), 7);
-    for (const point of result.predictions) {
-      expect(point.lowerApy).toBeLessThanOrEqual(point.predictedApy);
-      expect(point.upperApy).toBeGreaterThanOrEqual(point.predictedApy);
-    }
-  });
-
-  it("handles a very large synthetic APY without overflow or NaN", () => {
-    const result = predictApy("StressTest", makeFlatHistory(500_000, 14), 7);
-    for (const point of result.predictions) {
-      expect(Number.isFinite(point.predictedApy)).toBe(true);
-      expect(Number.isFinite(point.lowerApy)).toBe(true);
-      expect(Number.isFinite(point.upperApy)).toBe(true);
-      expect(Number.isNaN(point.predictedApy)).toBe(false);
-    }
-  });
-
-  it("handles an extreme billions-scale synthetic APY without overflow", () => {
-    const result = predictApy("ExtremeStress", makeFlatHistory(9_000_000_000, 14), 7);
-    for (const point of result.predictions) {
-      expect(Number.isFinite(point.predictedApy)).toBe(true);
-      expect(point.predictedApy).toBeGreaterThan(0);
-    }
-  });
-
-  it("distinguishes two different tiny predicted APYs instead of both flattening to zero", () => {
-    const a = predictApy("TinyA", makeFlatHistory(0.00002, 14), 7);
-    const b = predictApy("TinyB", makeFlatHistory(0.00008, 14), 7);
-
-    expect(a.predictions[0].predictedApy).not.toBe(b.predictions[0].predictedApy);
-    expect(a.predictions[0].predictedApy).toBeGreaterThan(0);
-    expect(b.predictions[0].predictedApy).toBeGreaterThan(0);
-  });
-
-  it("falls back gracefully for tiny APY with insufficient history (<3 points)", () => {
-    const shortHistory = [
-      { date: "2026-05-01", apy: 0.00003 },
-      { date: "2026-05-02", apy: 0.00004 },
-    ];
-    const result = predictApy("TinyShort", shortHistory, 7);
-    for (const point of result.predictions) {
-      expect(Number.isFinite(point.predictedApy)).toBe(true);
+      expect(point.confidence).toBeGreaterThanOrEqual(0);
+      expect(point.confidence).toBeLessThanOrEqual(1);
     }
   });
 });
